@@ -1,0 +1,20 @@
+from escpos.printer import Usb
+
+""" Seiko Epson Corp. Receipt Printer (EPSON TM-T88III) """
+p = Usb(0x04b8, 0x0047, 0)
+# p.line_spacing()
+# p.text("Hello there\n")
+# p.cut()
+p.line_spacing(30)
+p.text("sdingle spacing\n")
+p.text("sdingle spacing\n")
+p.text("sdingle spacing\n")
+p.line_spacing(45)
+p.text("spacing 1.5 \n")
+p.text("spacing 1.5 \n")
+p.text("spacing 1.5 \n")
+p.line_spacing(60)
+p.text("Double spacing\n")
+p.text("Double spacing\n")
+p.text("Double spacing\n")
+# p.line_spacing()
