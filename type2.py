@@ -269,19 +269,19 @@ def key_check(stdscr, key):
             quit()
         
         match(key2):
-            case 97: # alt+a
+            case 97: # alt+a toggle autoreturn
                 # stdscr.addstr(16, 0, "you pressed alt+a")
                 my_machine.toggle_autoreturn()
             case 98:  # alt+b
                 # stdscr.addstr(16, 0, "you pressed alt+b")
                 pass
-            case 108: # alt+l
+            case 108: # alt+l set left margin
                 my_machine.margin_set_left(stdscr)
                 stdscr.erase()
                 # stdscr.addstr(16, 0, "you pressed alt+l")
             case 110:
                 my_machine.toggle_margin_release()
-            case 114: #alt+r
+            case 114: #alt+r set right margin
                 my_machine.margin_set_right(stdscr)
             case 115: # alt-s line spacing toggle
                 my_machine.toggle_line_space()
