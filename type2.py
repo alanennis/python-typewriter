@@ -124,7 +124,7 @@ class Typewriter():
         #send contents of line to file if using file
         if (self.use_file):
             self.line_for_file = "".join(self.buffer)
-            with open(self.file_name, 'a') as self.f1:
+            with open("./txt_out/" + self.file_name, 'a') as self.f1:
                 self.f1.write(self.line_for_file + "\n")
 
         #send contents of line to printer
