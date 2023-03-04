@@ -7,7 +7,9 @@ that uses the ESC protocol
 
 requires:\
 python 3.10+ ( uses case keyword )\
-escpos python library\
+escpos python library 1.9 from https://pypi.org/project/escpos/ and\
+https://python-escpos.readthedocs.io/en/latest/
+
 curses (built in)
 
 At this point I have added all i need, the rest if just polish and\
