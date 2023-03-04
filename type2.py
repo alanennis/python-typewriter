@@ -41,7 +41,6 @@ class Typewriter():
             self.printer_found = True
         except:
             self.printer_found = False
-        # self.p.text("printer online \n")
 
 
     def __str__(self):
@@ -56,8 +55,6 @@ class Typewriter():
         return specs
 
     def give_buffer(self):
-        # test_buffer = ["1", "b", "house"]
-        # return_string = "".join(test_buffer)
         return_string = "".join(self.buffer)
         return return_string
 
@@ -113,6 +110,7 @@ class Typewriter():
             self.buffer.pop(pos -1)
     
     def buffer_ripple(self):
+        """ bump all the buffers contents up the chain"""
         self.prev_buf_3 = self.prev_buf_2
         self.prev_buf_2 = self.prev_buf_1
         self.prev_buf_1 = self.give_buffer()
@@ -147,14 +145,16 @@ class Typewriter():
         stdscr.clrtoeol()
 
     def send_to_printer(self, buffer):
+        """ send buffer to the printer"""
         if self.current_spacing == 1: self.raw_spacing = 30
         if self.current_spacing == 1.5: self.raw_spacing = 40
         if self.current_spacing == 2: self.raw_spacing = 60
 
-        self.p.line_spacing(self.raw_spacing)
-        self.printer_line = "".join(buffer)
-        self.p.text(self.printer_line)
-        self.p.text("\n")
+        if self.printer_found:
+            self.p.line_spacing(self.raw_spacing)
+            self.printer_line = "".join(buffer)
+            self.p.text(self.printer_line)
+            self.p.text("\n")
 
     def tab(self):
         """send cursor to the next tab or to the right margin if no tabs"""
@@ -214,13 +214,14 @@ class Typewriter():
 
     def right_margin_flush(self):
         """ move cursor to right margin and print text flush with right margin"""
-        passa
     
     def toggle_help(self):
         self.help_wanted = not self.help_wanted
 
-
+# ----------------------------
 # start of non class functions
+# ----------------------------
+
 def show_help(stdscr):
     help_row = 11
     # stdscr.erase()
