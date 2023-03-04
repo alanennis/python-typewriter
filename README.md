@@ -12,7 +12,7 @@ https://python-escpos.readthedocs.io/en/latest/
 
 curses (built in)
 
-[Alt text](screenshot.png "Screenshot")
+[Screenshot](./screenshot.png)
 
 At this point I have added all i need, the rest if just polish and\
 stupidity checks, there are some more features that could be added\
