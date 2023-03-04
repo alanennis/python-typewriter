@@ -12,6 +12,8 @@ https://python-escpos.readthedocs.io/en/latest/
 
 curses (built in)
 
+[Alt text](relative%20./screenshot.png?raw=true "Screenshot")
+
 At this point I have added all i need, the rest if just polish and\
 stupidity checks, there are some more features that could be added\
 like tabs and some housekeeping stuff, ini file loading so that\
