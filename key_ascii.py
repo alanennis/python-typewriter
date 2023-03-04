@@ -29,11 +29,12 @@ def Main(screen):
                 if ch2 == 97:
                     screen.addstr(4, 0, "you pressed alt+a")
                     
+                screen.erase()
                 screen.addstr(5, 5, 'ALT+'+str(ch2))
-                screen.clrtoeol()
                 screen.refresh()
                 screen.nodelay(False)
         else:
+            screen.erase()
             screen.addstr(5, 5, str(ch))
 
 

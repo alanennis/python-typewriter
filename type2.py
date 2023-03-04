@@ -1,6 +1,6 @@
 import curses
 from curses import wrapper
-from os import environ
+from os import environ, get_terminal_size
 from time import strftime
 from escpos.printer import Usb
 
@@ -35,6 +35,7 @@ class Typewriter():
         self.use_file = True
         self.use_printer = True
         self.margin_hot_zone = False
+        self.help_wanted = False
         try:
             self.p = Usb(0x04b8, 0x0047, 0)
             self.printer_found = True
@@ -213,20 +214,34 @@ class Typewriter():
 
     def right_margin_flush(self):
         """ move cursor to right margin and print text flush with right margin"""
-        pass
+        passa
+    
+    def toggle_help(self):
+        self.help_wanted = not self.help_wanted
 
 
 # start of non class functions
+def show_help(stdscr):
+    help_row = 11
+    # stdscr.erase()
+    help_text = """esc to quit, alt + letter below:
+l = set left margin  r = set right margin   s = toggle line spacing
+a = set autoreturn   n = toggle margin release
+"""
+    if (my_machine.help_wanted):
+        stdscr.addstr(help_row, 0, f"{help_text}", curses.color_pair(5))
+
 def show_handy_settings(stdscr, machine):
+    handy_row = 6
     stdscr.erase()
-    stdscr.addstr(10, 0, f"Width={my_machine.width}", curses.color_pair(5))
-    stdscr.addstr(10, 10, f"LS={my_machine.current_spacing}", curses.color_pair(5))
-    stdscr.addstr(10, 17, f"A-RTN={my_machine.autoreturn}", curses.color_pair(5))
-    stdscr.addstr(10, 30, f"LM={my_machine.left_margin}", curses.color_pair(5))
-    stdscr.addstr(10, 36, f"RM={my_machine.right_margin}", curses.color_pair(5))
-    stdscr.addstr(11, 0, f"File={my_machine.file_name}", curses.color_pair(5))
-    stdscr.addstr(12, 0, f"Printer Found={my_machine.printer_found}", curses.color_pair(5))
-    stdscr.addstr(13, 0, "alt-h for help", curses.color_pair(5))
+    stdscr.addstr(handy_row, 0, f"Width={my_machine.width}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 10, f"LS={my_machine.current_spacing}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 17, f"A-RTN={my_machine.autoreturn}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 30, f"LM={my_machine.left_margin}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 36, f"RM={my_machine.right_margin}", curses.color_pair(5))
+    stdscr.addstr((handy_row +1), 0, f"File={my_machine.file_name}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 0, f"Printer Found={my_machine.printer_found}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
 def display(screen, my_machine):
     print(my_machine)
@@ -238,7 +253,7 @@ def key_check(stdscr, key):
         my_machine.char_add(stdscr, chr(key), cursy)
         # not sure if this will be kept, gives column number
         stdscr.erase()
-        stdscr.addstr(15,0, str(cursy))
+        # stdscr.addstr(15,0, str(cursy))
     
     elif key in (curses.KEY_BACKSPACE, '\b', '\x7f', 127, 263):
         _, cursy = stdscr.getyx()
@@ -246,7 +261,7 @@ def key_check(stdscr, key):
         my_machine.backspace(stdscr, cursy)
         # not sure if this will be kept, gives column number
         stdscr.erase()
-        stdscr.addstr(15,0, str(cursy))
+        # stdscr.addstr(15,0, str(cursy))
 
 
     elif key in (curses.KEY_ENTER, 13, 10):
@@ -269,11 +284,17 @@ def key_check(stdscr, key):
             quit()
         
         match(key2):
+            case 9: # tab pressed
+                pass
             case 97: # alt+a toggle autoreturn
                 # stdscr.addstr(16, 0, "you pressed alt+a")
                 my_machine.toggle_autoreturn()
             case 98:  # alt+b
                 # stdscr.addstr(16, 0, "you pressed alt+b")
+                pass
+            case 104: # alt+h toggle help
+                # invert the help wanted bool   
+                my_machine.toggle_help()
                 pass
             case 108: # alt+l set left margin
                 my_machine.margin_set_left(stdscr)
@@ -313,15 +334,20 @@ def setup_curses(stdscr):
     curses.init_pair(4, curses.COLOR_CYAN, curses.COLOR_BLACK)
     curses.init_pair(5, 241, -1)
     stdscr.erase()
-    
+   
 
 def main(stdscr, my_machine):
+  
+
     setup_curses(stdscr)
     start_screen(stdscr)
 
     while True:
         
         show_handy_settings(stdscr, my_machine)
+        if (my_machine.help_wanted):
+            show_help(stdscr)
+
         show_buffers(stdscr, my_machine)
   
         try:
@@ -337,8 +363,13 @@ def main(stdscr, my_machine):
 
 
 if __name__ == "__main__":
+    term_col, term_row = get_terminal_size()
+    if (term_row < 15) or (term_col < 81):
+        print("terminal is too small please make it at least 20 lines by 80 columns")
+        quit()
+
     my_machine = Typewriter()
-    print(my_machine)  
+    # print(my_machine)  
 
     # curses delays the esc key in case you are about to
     # use it for an esc sequence the line below calls 
@@ -347,7 +378,6 @@ if __name__ == "__main__":
     wrapper(main, my_machine)
 
 
-# TODO the help screen with the command shorcuts
 # TODO in line editing of line before sending to the printer/file
 # TODO tabs
 # TODO file handling to rename file 
