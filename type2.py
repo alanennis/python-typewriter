@@ -268,10 +268,12 @@ def key_check(stdscr, key):
     elif key in (curses.KEY_ENTER, 13, 10):
         my_machine.carriage_return(stdscr)
 
-    elif key == curses.KEY_LEFT:
+    elif key in (curses.KEY_LEFT, 260):
         pass
+
     elif key == curses.KEY_RIGHT:
         pass
+    
     elif key == curses.KEY_UP:
         pass
     elif key == curses.KEY_DOWN:
@@ -366,7 +368,7 @@ def main(stdscr, my_machine):
 if __name__ == "__main__":
     term_col, term_row = get_terminal_size()
     if (term_row < 15) or (term_col < 81):
-        print("terminal is too small please make it at least 20 lines by 80 columns")
+        print("terminal is too small please make it at least 15 lines by 80 columns")
         quit()
 
     my_machine = Typewriter()
