@@ -36,6 +36,8 @@ class Typewriter():
         self.use_printer = True
         self.margin_hot_zone = False
         self.help_wanted = False
+        self.word_count = 0
+        self.line_count = 0
         try:
             self.p = Usb(0x04b8, 0x0047, 0)
             self.printer_found = True
@@ -121,11 +123,23 @@ class Typewriter():
         do what needs to be done
         """
         self.margin_hot_zone = False
+        
+        # split the line based on spaces and then count the size of the result
+        self.line = "".join(self.buffer)
+        self.word_count += len(self.line.split())
+
+        # add one to the line count.
+        self.line_count += 1
+
         #send contents of line to file if using file
         if (self.use_file):
             self.line_for_file = "".join(self.buffer)
-            with open("./txt_out/" + self.file_name, 'a') as self.f1:
-                self.f1.write(self.line_for_file + "\n")
+            try:
+                with open("./txt_out/" + self.file_name, 'a') as self.f1:
+                    self.f1.write(self.line_for_file + "\n")
+            except:
+                print("problem with writing to the file")
+                quit()
 
         #send contents of line to printer
         if (self.use_printer and self.printer_found):
@@ -242,6 +256,8 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr(handy_row, 36, f"RM={my_machine.right_margin}", curses.color_pair(5))
     stdscr.addstr((handy_row +1), 0, f"File={my_machine.file_name}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 0, f"Printer Found={my_machine.printer_found}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 20, f"WC={my_machine.word_count}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 31, f"LC={my_machine.line_count}", curses.color_pair(5))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
 def display(screen, my_machine):
