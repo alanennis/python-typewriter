@@ -10,7 +10,7 @@ def set_shorter_esc_delay_in_os(delay_ms):
     environ.setdefault('ESCDELAY', delay_ms)
 
 class Typewriter():
-    def __init__(self, width = 80, spacing_index = 1, 
+    def __init__(self, width = 75, spacing_index = 1, 
                 autoreturn=False, margin_bell=8,
                 left_margin = 0, margin_release = False):
         self.width = width
