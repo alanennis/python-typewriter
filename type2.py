@@ -300,7 +300,8 @@ def key_check(stdscr, key):
         stdscr.nodelay(True)
         key2 = stdscr.getch() # get the key pressed after ALT
         if key2 == -1: # if there is no key after alt then esc was pressed
-            quit()
+            # quit()
+            pass
         
         match(key2):
             case 9: # tab pressed
@@ -321,6 +322,8 @@ def key_check(stdscr, key):
                 # stdscr.addstr(16, 0, "you pressed alt+l")
             case 110:
                 my_machine.toggle_margin_release()
+            case 113: #alt+q pressed so quit
+                quit()
             case 114: #alt+r set right margin
                 my_machine.margin_set_right(stdscr)
             case 115: # alt-s line spacing toggle
@@ -394,7 +397,8 @@ if __name__ == "__main__":
     # use it for an esc sequence the line below calls 
     # a function that sets an env variable to adjust the delay
     set_shorter_esc_delay_in_os('150')  
-    wrapper(main, my_machine)
+    curses,wrapper(main, my_machine)
+    # wrapper(main, my_machine)
 
 
 # TODO in line editing of line before sending to the printer/file
