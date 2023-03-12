@@ -54,7 +54,7 @@ class Typewriter():
                 f"use file = {self.use_file}\n" \
                 f"use printer = {self.use_printer}\n"
 
-        return specs # test
+        return specs
 
     def give_buffer(self):
         return_string = "".join(self.buffer)
