@@ -1,0 +1,9 @@
+width = 75
+autoreturn = true
+spacing_index = 1 # 1.5 line spacingi, 0 for single line, 2 for double line
+margin_bell = 8 # numbers of spaces from left margin to bell
+right_margin = 75 # set the distance to the right margin
+left_margin = 0
+use_file = true
+use_printer = true
+save_folder = "/home/alane/Dropbox/writing/"

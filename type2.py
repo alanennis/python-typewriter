@@ -3,6 +3,7 @@ from curses import wrapper
 from os import environ, get_terminal_size
 from time import strftime
 from escpos.printer import Usb
+import tomllib
 
 
 
@@ -12,7 +13,7 @@ def set_shorter_esc_delay_in_os(delay_ms):
 class Typewriter():
     def __init__(self, width = 75, spacing_index = 1, 
                 autoreturn=False, margin_bell=8,
-                left_margin = 0, margin_release = False):
+                left_margin = 0):
         self.width = width
         self.autoreturn = autoreturn
         self.spacing_choices = (1, 1.5, 2)
@@ -24,7 +25,7 @@ class Typewriter():
         self.left_margin = left_margin
         self.tab_bar = []
         self.tab_bar.extend('.' * self.width)
-        self.margin_release = margin_release
+        self.margin_release = False
         self.tab_bar[self.left_margin] = "!"
         self.tab_bar[self.right_margin - 1] = "!"
         self.prev_buf_1 = ''
@@ -38,6 +39,7 @@ class Typewriter():
         self.help_wanted = False
         self.word_count = 0
         self.line_count = 0
+        self.save_folder = "./"
         try:
             self.p = Usb(0x04b8, 0x0047, 0)
             self.printer_found = True
@@ -135,7 +137,7 @@ class Typewriter():
         if (self.use_file):
             self.line_for_file = "".join(self.buffer)
             try:
-                with open("./txt_out/" + self.file_name, 'a') as self.f1:
+                with open(self.save_folder + self.file_name, 'a') as self.f1:
                     self.f1.write(self.line_for_file + "\n")
             except:
                 print("problem with writing to the file")
@@ -239,9 +241,9 @@ class Typewriter():
 def show_help(stdscr):
     help_row = 11
     # stdscr.erase()
-    help_text = """esc to quit, alt + letter below:
-l = set left margin  r = set right margin   s = toggle line spacing
-a = set autoreturn   n = toggle margin release
+    help_text = """alt + letter below:
+l = set left margin  r = set right margin       s = toggle line spacing
+a = set autoreturn   n = toggle margin release  q = quit
 """
     if (my_machine.help_wanted):
         stdscr.addstr(help_row, 0, f"{help_text}", curses.color_pair(5))
@@ -256,8 +258,8 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr(handy_row, 36, f"RM={my_machine.right_margin}", curses.color_pair(5))
     stdscr.addstr((handy_row +1), 0, f"File={my_machine.file_name}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 0, f"Printer Found={my_machine.printer_found}", curses.color_pair(5))
-    stdscr.addstr((handy_row + 2), 20, f"WC={my_machine.word_count}", curses.color_pair(5))
-    stdscr.addstr((handy_row + 2), 31, f"LC={my_machine.line_count}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 20, f"LC={my_machine.line_count}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 27, f"WC={my_machine.word_count}", curses.color_pair(5))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
 def display(screen, my_machine):
@@ -387,11 +389,21 @@ def main(stdscr, my_machine):
 if __name__ == "__main__":
     term_col, term_row = get_terminal_size()
     if (term_row < 15) or (term_col < 81):
-        print("terminal is too small please make it at least 15 lines by 80 columns")
+        print("terminal is too small please make it at least 16 lines by 81 columns")
         quit()
+    
+    # use the toml config file, returns it as a dict
+    with open("./config.toml", mode="rb") as fp:
+        config = tomllib.load(fp)
 
-    my_machine = Typewriter()
-    # print(my_machine)  
+    my_machine = Typewriter(
+        width=config['width'],
+        autoreturn=config['autoreturn'],
+        spacing_index=config['spacing_index'],
+        margin_bell=config['margin_bell'],
+        left_margin=config['left_margin'])
+    
+    my_machine.save_folder = config['save_folder']
 
     # curses delays the esc key in case you are about to
     # use it for an esc sequence the line below calls 
