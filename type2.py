@@ -4,6 +4,8 @@ from os import environ, get_terminal_size
 from time import strftime
 from escpos.printer import Usb
 import tomllib
+import logging
+from sys import argv
 
 
 
@@ -87,6 +89,8 @@ class Typewriter():
 
     def char_add(self, stdscr, key, pos):
         """add a character to buffer but check margins etc"""
+        logging.debug(f"buff len = {len(self.buffer)}")
+        logging.debug(f"autortn = {self.autoreturn}")
         # if the buffer is at the margin bell point then 
         # make the bell ring and set the hot zone flag
         if (len(self.buffer) == (self.right_margin - self.margin_bell)):
@@ -100,9 +104,15 @@ class Typewriter():
             self.buffer.insert(pos, key)
         
         # if the key is in the hot zone and autoreturn is on and 
-        # you hit space or hypen then you will get an autoreturn
-        if (self.margin_hot_zone and self.autoreturn and key in (" ", "-")):
-            self.carriage_return(stdscr)
+        # you hit space or hypen or reach the end of line 
+        # then you will get an autoreturn
+        # if you reach the end of the line and auto is not on then just ding
+        if (self.margin_hot_zone and key in (" ", "-") or pos == len(self.buffer)):
+            if self.autoreturn:
+              self.carriage_return(stdscr)
+            else:
+                curses.beep()
+                
 
     def backspace(self, stdscr, pos):
         """move the cursor back one space and delete last char in buffer"""
@@ -111,9 +121,11 @@ class Typewriter():
         self.clear_line_start(stdscr)
 
         if (len(self.buffer) > 0):
-            self.buffer.pop(pos -1)
+            logging.debug(f'length is {len(self.buffer)}')
+            logging.debug(f'position is {pos}')
+            self.buffer.pop(pos - 1)
     
-    def buffer_ripple(self):
+    def buffer_ripplea(self):
         """ bump all the buffers contents up the chain"""
         self.prev_buf_3 = self.prev_buf_2
         self.prev_buf_2 = self.prev_buf_1
@@ -260,6 +272,7 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr((handy_row + 2), 0, f"Printer Found={my_machine.printer_found}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 20, f"LC={my_machine.line_count}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 27, f"WC={my_machine.word_count}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 37, f"File={my_machine.use_file}", curses.color_pair(2))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
 def display(screen, my_machine):
@@ -275,9 +288,10 @@ def key_check(stdscr, key):
         # stdscr.addstr(15,0, str(cursy))
     
     elif key in (curses.KEY_BACKSPACE, '\b', '\x7f', 127, 263):
-        _, cursy = stdscr.getyx()
+        _, cursx = stdscr.getyx()
+        logging.debug(f'cursor is at {cursx}')
         # stdscr.addstr(15, 0, str(cursy))
-        my_machine.backspace(stdscr, cursy)
+        my_machine.backspace(stdscr, cursx)
         # not sure if this will be kept, gives column number
         stdscr.erase()
         # stdscr.addstr(15,0, str(cursy))
@@ -358,8 +372,17 @@ def setup_curses(stdscr):
     curses.init_pair(4, curses.COLOR_CYAN, -1)
     curses.init_pair(5, 241, -1)
     stdscr.erase()
-   
 
+def show_cursor(stdscr):
+    # stdscr.move(5,0)
+    sh_cursy, sh_cursx = stdscr.getyx()
+    if (sh_cursx == 0):
+        stdscr.addstr(5, sh_cursx, "^")
+    else:
+        # sh_cursx = sh_cursx - 1
+        stdscr.addstr(5, sh_cursx - 1, "^")
+    # stdscr.clrtoeol()
+   
 def main(stdscr, my_machine):
   
 
@@ -373,7 +396,8 @@ def main(stdscr, my_machine):
             show_help(stdscr)
 
         show_buffers(stdscr, my_machine)
-  
+        # show_cursor(stdscr)
+
         try:
             key = stdscr.getch()
         except: 
@@ -387,6 +411,8 @@ def main(stdscr, my_machine):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(filename='type.log', encoding='utf-8', level=logging.INFO)
+    logging.debug("starting...")
     term_col, term_row = get_terminal_size()
     if (term_row < 15) or (term_col < 81):
         print("terminal is too small please make it at least 16 lines by 81 columns")
@@ -404,6 +430,11 @@ if __name__ == "__main__":
         left_margin=config['left_margin'])
     
     my_machine.save_folder = config['save_folder']
+    if (len(argv) == 2):
+        if (argv[1] == "True"):
+            my_machine.use_file = True
+        else:
+            my_machine.use_file = False
 
     # curses delays the esc key in case you are about to
     # use it for an esc sequence the line below calls 
