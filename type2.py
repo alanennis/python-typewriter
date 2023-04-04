@@ -125,7 +125,7 @@ class Typewriter():
             logging.debug(f'position is {pos}')
             self.buffer.pop(pos - 1)
     
-    def buffer_ripplea(self):
+    def buffer_ripple(self):
         """ bump all the buffers contents up the chain"""
         self.prev_buf_3 = self.prev_buf_2
         self.prev_buf_2 = self.prev_buf_1
