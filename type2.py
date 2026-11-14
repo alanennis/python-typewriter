@@ -3,7 +3,6 @@ from curses import wrapper
 from os import environ, get_terminal_size, path
 from time import strftime
 from escpos.printer import Usb
-#from escpos import POSPrinter
 import tomllib
 import logging
 import re
@@ -11,7 +10,6 @@ from pathlib import Path
 from sys import argv
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
-
 
 
 def save_margins_to_config(left_margin, right_margin, config_path=CONFIG_PATH):
@@ -33,7 +31,7 @@ def set_shorter_esc_delay_in_os(delay_ms):
     environ.setdefault('ESCDELAY', delay_ms)
 
 class Typewriter():
-    def __init__(self, width = 75, spacing_index = 1, 
+    def __init__(self, width = 75, spacing_index = 1,
                 autoreturn=False, margin_bell=8,
                 left_margin = 0, right_margin = None,
                 use_file = True, use_printer = True,
@@ -112,7 +110,7 @@ class Typewriter():
 
     def give_prev_buff_3(self):
         return self.prev_buf_3
-    
+
     def give_tab_bar(self):
         """ return the current contents of tab bar as string"""
         return ("".join(self.tab_bar))
@@ -134,7 +132,7 @@ class Typewriter():
         if self.centre_mode:
             self.centre_add(key)
             return
-        # if the buffer is at the margin bell point then 
+        # if the buffer is at the margin bell point then
         # make the bell ring and set the hot zone flag
         if (len(self.buffer) == (self.right_margin - self.margin_bell)):
             self.bell()
@@ -157,7 +155,7 @@ class Typewriter():
                 self.carriage_return()
             else:
                 self.bell()
-                
+
 
     def backspace(self):
         """move the cursor back one space and delete the char before it"""
@@ -172,7 +170,7 @@ class Typewriter():
             logging.debug(f'position is {self.cursor}')
             self.buffer.pop(self.cursor - 1)
             self.cursor -= 1
-    
+
     def buffer_ripple(self):
         """ bump all the buffers contents up the chain"""
         self.prev_buf_3 = self.prev_buf_2
@@ -185,7 +183,7 @@ class Typewriter():
         do what needs to be done
         """
         self.margin_hot_zone = False
-        
+
         # split the line based on spaces and then count the size of the result
         self.line = "".join(self.buffer)
         self.word_count += len(self.line.split())
@@ -214,7 +212,7 @@ class Typewriter():
         self.margin_release = False
         self.centre_mode = False
         self.centre_chars = []
-        
+
 
     def send_to_printer(self, buffer):
         """ send buffer to the printer"""
@@ -227,22 +225,6 @@ class Typewriter():
             self.printer_line = "".join(buffer)
             self.p.text(self.printer_line)
             self.p.text("\n")
-
-    def tab(self):
-        """send cursor to the next tab or to the right margin if no tabs"""
-        pass
-
-    def tab_clear(self):
-        """ clear all tabs but not margins"""
-        pass
-
-    def tab_set(self):
-        """add thius cursor position to the tab stop locations"""
-        pass
-
-    def line_feed(self):
-        """ just move the carriage down the current line spacing amount"""
-        pass
 
     def margin_set_left(self):
         """ set the current cursor position as the left margin
@@ -265,19 +247,10 @@ class Typewriter():
         self.tab_bar[self._right_marker_index()] = "."
         self.right_margin = new_right
         self.tab_bar[self._right_marker_index()] = "!"
-    
+
     def toggle_margin_release(self):
         """ allow the cursor to move further than the margins"""
-        # toggle the margin release
         self.margin_release = not self.margin_release
-
-    def underline_all_toggle(self):
-        """ enable underline an all chars including spaces but not tabs"""
-        pass
-
-    def underline_word_toggle(self):
-        """ enable underline an all characters but not spaces"""
-        pass
 
     def centre_text(self):
         """ move cursor to the centre of the buffer and centre align typed chars
@@ -316,9 +289,7 @@ class Typewriter():
         self.buffer.extend(" " * start + text)
         self.cursor = len(self.buffer)
 
-    def right_margin_flush(self):
-        """ move cursor to right margin and print text flush with right margin"""
-    
+
     def toggle_help(self):
         self.help_wanted = not self.help_wanted
 
@@ -328,7 +299,6 @@ class Typewriter():
 
 def show_help(stdscr, machine):
     help_row = 11
-    # stdscr.erase()
     help_text = f"""alt + letter below:
 l = set left margin  r = set right margin       s = toggle line spacing
 a = set autoreturn   n = toggle margin release  q = quit
@@ -355,58 +325,34 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr((handy_row + 2), 37, f"File={machine.use_file}", curses.color_pair(2))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
-def display(machine):
-    print(machine)
-
 def key_check(stdscr, key, machine):
     if 32 <= key <= 126:
         machine.char_add(chr(key))
 
-    elif key in (curses.KEY_BACKSPACE, '\b', '\x7f', 127, 263):
+    elif key in (curses.KEY_BACKSPACE, 127):
         machine.backspace()
 
     elif key in (curses.KEY_ENTER, 13, 10):
         machine.carriage_return()
 
-    elif key in (curses.KEY_LEFT, 260):
-        pass
-
-    elif key == curses.KEY_RIGHT:
-        pass
-    
-    elif key == curses.KEY_UP:
-        pass
-    elif key == curses.KEY_DOWN:
-        pass
-
     elif key == 27:
-        # curses.beep()
+        # alt+key arrives as esc followed by the key. a lone esc gives -1
+        # here and matches nothing below
         stdscr.nodelay(True)
-        key2 = stdscr.getch() # get the key pressed after ALT
+        key2 = stdscr.getch()
         stdscr.nodelay(False)
-        if key2 == -1: # if there is no key after alt then esc was pressed
-            # quit()
-            pass
-        
+
         match(key2):
-            case 9: # tab pressed
-                pass
             case 97: # alt+a toggle autoreturn
-                # stdscr.addstr(16, 0, "you pressed alt+a")
                 machine.toggle_autoreturn()
-            case 98:  # alt+b
-                # stdscr.addstr(16, 0, "you pressed alt+b")
-                pass
             case 99: # alt+c toggle centre text
                 machine.centre_text()
             case 104: # alt+h toggle help
-                # invert the help wanted bool   
                 machine.toggle_help()
-                pass
             case 108: # alt+l set left margin
                 machine.margin_set_left()
                 save_margins_to_config(machine.left_margin, machine.right_margin)
-            case 110:
+            case 110: # alt+n toggle margin release
                 machine.toggle_margin_release()
             case 113: #alt+q pressed so quit
                 quit()
@@ -415,12 +361,12 @@ def key_check(stdscr, key, machine):
                 save_margins_to_config(machine.left_margin, machine.right_margin)
             case 115: # alt-s line spacing toggle
                 machine.toggle_line_space()
-                
+
 def start_screen(stdscr):
     stdscr.addstr("Typewriter starting up, press any key to go", curses.color_pair(2))
     stdscr.refresh()
     stdscr.getch()
-    stdscr.erase()  
+    stdscr.erase()
 
 def show_buffers(stdscr, machine):
     stdscr.addstr(4, 0, machine.give_tab_bar(), curses.color_pair(5))
@@ -446,41 +392,25 @@ def setup_curses(stdscr):
     curses.init_pair(5, 241, -1)
     stdscr.erase()
 
-def show_cursor(stdscr):
-    # stdscr.move(5,0)
-    sh_cursy, sh_cursx = stdscr.getyx()
-    if (sh_cursx == 0):
-        stdscr.addstr(5, sh_cursx, "^")
-    else:
-        # sh_cursx = sh_cursx - 1
-        stdscr.addstr(5, sh_cursx - 1, "^")
-    # stdscr.clrtoeol()
-   
 def main(stdscr, machine):
-  
-
     setup_curses(stdscr)
     start_screen(stdscr)
 
     while True:
-        
         show_handy_settings(stdscr, machine)
         if (machine.help_wanted):
             show_help(stdscr, machine)
 
         show_buffers(stdscr, machine)
-        # show_cursor(stdscr)
 
         try:
             key = stdscr.getch()
-        except: 
+        except:
             continue
-        
+
         key_check(stdscr, key, machine)
 
         stdscr.refresh()
-    
-    # start_screen(stdscr)
 
 
 def run():
@@ -491,7 +421,7 @@ def run():
     if (term_row < 16) or (term_col < 81):
         print("terminal is too small please make it at least 16 lines by 81 columns")
         quit()
-    
+
     # use the toml config file, returns it as a dict
     with open(CONFIG_PATH, mode="rb") as fp:
         config = tomllib.load(fp)
@@ -508,7 +438,7 @@ def run():
         printer_vendor_id=config.get('printer_vendor_id'),
         printer_product_id=config.get('printer_product_id'),
         bell=curses.beep)
-    
+
     machine.save_folder = config['save_folder']
     if (len(argv) == 2):
         if (argv[1] == "True"):
@@ -517,9 +447,9 @@ def run():
             machine.use_file = False
 
     # curses delays the esc key in case you are about to
-    # use it for an esc sequence the line below calls 
+    # use it for an esc sequence the line below calls
     # a function that sets an env variable to adjust the delay
-    set_shorter_esc_delay_in_os('150')  
+    set_shorter_esc_delay_in_os('150')
     wrapper(main, machine)
 
 
@@ -528,12 +458,13 @@ if __name__ == "__main__":
 
 
 # TODO in line editing of line before sending to the printer/file
-# TODO tabs
-# TODO file handling to rename file 
+#      (arrow keys to move the cursor along the line)
+# TODO tabs: alt+tab to jump to the next tab stop (or right margin if none),
+#      set a tab stop at the cursor, clear all tabs but not margins
+# TODO line feed: move the carriage down without a carriage return
+# TODO underline text: underline everything including spaces, or words only
+# TODO right margin flush: type text flush against the right margin
+# TODO file handling to rename file
 # TODO command line startup options to set attributes without having
-# to edit the script directly
+#      to edit the script directly
 # TODO convert this to rust as a project and so that it is BLAZING fast
-# TODO centering text
-# TODO underline text
-# TODO right margin flush
-

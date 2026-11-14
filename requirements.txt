@@ -1,0 +1,2 @@
+# runtime dependencies (curses and tomllib are part of the standard library)
+python-escpos==3.1
