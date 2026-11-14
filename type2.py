@@ -326,47 +326,47 @@ class Typewriter():
 # start of non class functions
 # ----------------------------
 
-def show_help(stdscr):
+def show_help(stdscr, machine):
     help_row = 11
     # stdscr.erase()
     help_text = f"""alt + letter below:
 l = set left margin  r = set right margin       s = toggle line spacing
 a = set autoreturn   n = toggle margin release  q = quit
 c = centre text (enter to finish)
-file path:{config['save_folder']}
+file path:{machine.save_folder}
 """
-    if (my_machine.help_wanted):
+    if (machine.help_wanted):
         stdscr.addstr(help_row, 0, help_text, curses.color_pair(5))
 
 def show_handy_settings(stdscr, machine):
     handy_row = 6
     stdscr.erase()
-    stdscr.addstr(handy_row, 0, f"Width={my_machine.width}", curses.color_pair(5))
-    stdscr.addstr(handy_row, 10, f"LS={my_machine.current_spacing}", curses.color_pair(5))
-    stdscr.addstr(handy_row, 17, f"A-RTN={my_machine.autoreturn}", curses.color_pair(5))
-    stdscr.addstr(handy_row, 30, f"LM={my_machine.left_margin}", curses.color_pair(5))
-    stdscr.addstr(handy_row, 36, f"RM={my_machine.right_margin}", curses.color_pair(5))
-    if my_machine.centre_mode:
+    stdscr.addstr(handy_row, 0, f"Width={machine.width}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 10, f"LS={machine.current_spacing}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 17, f"A-RTN={machine.autoreturn}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 30, f"LM={machine.left_margin}", curses.color_pair(5))
+    stdscr.addstr(handy_row, 36, f"RM={machine.right_margin}", curses.color_pair(5))
+    if machine.centre_mode:
         stdscr.addstr(handy_row, 44, "CENTRE", curses.color_pair(2))
-    stdscr.addstr((handy_row +1), 0, f"File={my_machine.file_name}", curses.color_pair(5))
-    stdscr.addstr((handy_row + 2), 0, f"Printer Found={my_machine.printer_found}", curses.color_pair(5))
-    stdscr.addstr((handy_row + 2), 20, f"LC={my_machine.line_count}", curses.color_pair(5))
-    stdscr.addstr((handy_row + 2), 27, f"WC={my_machine.word_count}", curses.color_pair(5))
-    stdscr.addstr((handy_row + 2), 37, f"File={my_machine.use_file}", curses.color_pair(2))
+    stdscr.addstr((handy_row +1), 0, f"File={machine.file_name}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 0, f"Printer Found={machine.printer_found}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 20, f"LC={machine.line_count}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 27, f"WC={machine.word_count}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 2), 37, f"File={machine.use_file}", curses.color_pair(2))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
-def display(screen, my_machine):
-    print(my_machine)
+def display(machine):
+    print(machine)
 
-def key_check(stdscr, key):
+def key_check(stdscr, key, machine):
     if 32 <= key <= 126:
-        my_machine.char_add(chr(key))
+        machine.char_add(chr(key))
 
     elif key in (curses.KEY_BACKSPACE, '\b', '\x7f', 127, 263):
-        my_machine.backspace()
+        machine.backspace()
 
     elif key in (curses.KEY_ENTER, 13, 10):
-        my_machine.carriage_return()
+        machine.carriage_return()
 
     elif key in (curses.KEY_LEFT, 260):
         pass
@@ -393,28 +393,28 @@ def key_check(stdscr, key):
                 pass
             case 97: # alt+a toggle autoreturn
                 # stdscr.addstr(16, 0, "you pressed alt+a")
-                my_machine.toggle_autoreturn()
+                machine.toggle_autoreturn()
             case 98:  # alt+b
                 # stdscr.addstr(16, 0, "you pressed alt+b")
                 pass
             case 99: # alt+c toggle centre text
-                my_machine.centre_text()
+                machine.centre_text()
             case 104: # alt+h toggle help
                 # invert the help wanted bool   
-                my_machine.toggle_help()
+                machine.toggle_help()
                 pass
             case 108: # alt+l set left margin
-                my_machine.margin_set_left()
-                save_margins_to_config(my_machine.left_margin, my_machine.right_margin)
+                machine.margin_set_left()
+                save_margins_to_config(machine.left_margin, machine.right_margin)
             case 110:
-                my_machine.toggle_margin_release()
+                machine.toggle_margin_release()
             case 113: #alt+q pressed so quit
                 quit()
             case 114: #alt+r set right margin
-                my_machine.margin_set_right()
-                save_margins_to_config(my_machine.left_margin, my_machine.right_margin)
+                machine.margin_set_right()
+                save_margins_to_config(machine.left_margin, machine.right_margin)
             case 115: # alt-s line spacing toggle
-                my_machine.toggle_line_space()
+                machine.toggle_line_space()
                 
 def start_screen(stdscr):
     stdscr.addstr("Typewriter starting up, press any key to go", curses.color_pair(2))
@@ -422,17 +422,17 @@ def start_screen(stdscr):
     stdscr.getch()
     stdscr.erase()  
 
-def show_buffers(stdscr, my_machine):
-    stdscr.addstr(4, 0, my_machine.give_tab_bar(), curses.color_pair(5))
-    stdscr.addstr(0, 0, my_machine.give_prev_buff_3(), curses.color_pair(5))
+def show_buffers(stdscr, machine):
+    stdscr.addstr(4, 0, machine.give_tab_bar(), curses.color_pair(5))
+    stdscr.addstr(0, 0, machine.give_prev_buff_3(), curses.color_pair(5))
     stdscr.clrtoeol()
-    stdscr.addstr(1, 0, my_machine.give_prev_buff_2(), curses.color_pair(5))
+    stdscr.addstr(1, 0, machine.give_prev_buff_2(), curses.color_pair(5))
     stdscr.clrtoeol()
-    stdscr.addstr(2, 0, my_machine.give_prev_buff_1(), curses.color_pair(5))
+    stdscr.addstr(2, 0, machine.give_prev_buff_1(), curses.color_pair(5))
     stdscr.clrtoeol()
-    stdscr.addstr(3, 0, my_machine.give_buffer(), curses.color_pair(1))
+    stdscr.addstr(3, 0, machine.give_buffer(), curses.color_pair(1))
     # put the screen cursor where the machine says the next character goes
-    stdscr.move(3, my_machine.cursor)
+    stdscr.move(3, machine.cursor)
 
 def setup_curses(stdscr):
     curses.start_color()
@@ -456,7 +456,7 @@ def show_cursor(stdscr):
         stdscr.addstr(5, sh_cursx - 1, "^")
     # stdscr.clrtoeol()
    
-def main(stdscr, my_machine):
+def main(stdscr, machine):
   
 
     setup_curses(stdscr)
@@ -464,11 +464,11 @@ def main(stdscr, my_machine):
 
     while True:
         
-        show_handy_settings(stdscr, my_machine)
-        if (my_machine.help_wanted):
-            show_help(stdscr)
+        show_handy_settings(stdscr, machine)
+        if (machine.help_wanted):
+            show_help(stdscr, machine)
 
-        show_buffers(stdscr, my_machine)
+        show_buffers(stdscr, machine)
         # show_cursor(stdscr)
 
         try:
@@ -476,14 +476,15 @@ def main(stdscr, my_machine):
         except: 
             continue
         
-        key_check(stdscr, key)
+        key_check(stdscr, key, machine)
 
         stdscr.refresh()
     
     # start_screen(stdscr)
 
 
-if __name__ == "__main__":
+def run():
+    """load the config, build the machine and start the curses interface"""
     logging.basicConfig(filename='type.log', encoding='utf-8', level=logging.INFO)
     logging.debug("starting...")
     term_col, term_row = get_terminal_size()
@@ -495,7 +496,7 @@ if __name__ == "__main__":
     with open(CONFIG_PATH, mode="rb") as fp:
         config = tomllib.load(fp)
 
-    my_machine = Typewriter(
+    machine = Typewriter(
         width=config['width'],
         autoreturn=config['autoreturn'],
         spacing_index=config['spacing_index'],
@@ -508,19 +509,22 @@ if __name__ == "__main__":
         printer_product_id=config.get('printer_product_id'),
         bell=curses.beep)
     
-    my_machine.save_folder = config['save_folder']
+    machine.save_folder = config['save_folder']
     if (len(argv) == 2):
         if (argv[1] == "True"):
-            my_machine.use_file = True
+            machine.use_file = True
         else:
-            my_machine.use_file = False
+            machine.use_file = False
 
     # curses delays the esc key in case you are about to
     # use it for an esc sequence the line below calls 
     # a function that sets an env variable to adjust the delay
     set_shorter_esc_delay_in_os('150')  
-    wrapper(main, my_machine)
-    # wrapper(main, my_machine)
+    wrapper(main, machine)
+
+
+if __name__ == "__main__":
+    run()
 
 
 # TODO in line editing of line before sending to the printer/file
