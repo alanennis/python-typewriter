@@ -7,3 +7,5 @@ left_margin = 0
 use_file = true
 use_printer = true
 save_folder = "/home/alane/Dropbox/writing/"
+printer_vendor_id = 0x04b8 # USB vendor id of the printer (find with lsusb)
+printer_product_id = 0x0047 # USB product id of the printer

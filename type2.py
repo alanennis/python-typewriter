@@ -1,12 +1,32 @@
 import curses
 from curses import wrapper
-from os import environ, get_terminal_size
+from os import environ, get_terminal_size, path
 from time import strftime
 from escpos.printer import Usb
+#from escpos import POSPrinter
 import tomllib
 import logging
+import re
+from pathlib import Path
 from sys import argv
 
+CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
+
+
+
+def save_margins_to_config(left_margin, right_margin, config_path=CONFIG_PATH):
+    """write the margin values back to the config file, leaving the
+    rest of the file (including comments) untouched"""
+    text = config_path.read_text()
+    for key, value in (("left_margin", left_margin), ("right_margin", right_margin)):
+        pattern = rf"^({key}\s*=\s*)\d+"
+        if re.search(pattern, text, flags=re.MULTILINE):
+            text = re.sub(pattern, rf"\g<1>{value}", text, count=1, flags=re.MULTILINE)
+        else:
+            if not text.endswith("\n"):
+                text += "\n"
+            text += f"{key} = {value}\n"
+    config_path.write_text(text)
 
 
 def set_shorter_esc_delay_in_os(delay_ms):
@@ -15,7 +35,14 @@ def set_shorter_esc_delay_in_os(delay_ms):
 class Typewriter():
     def __init__(self, width = 75, spacing_index = 1, 
                 autoreturn=False, margin_bell=8,
-                left_margin = 0):
+                left_margin = 0, right_margin = None,
+                use_file = True, use_printer = True,
+                printer_vendor_id = None, printer_product_id = None,
+                bell = None):
+        # bell is called whenever the machine wants to ding. the class knows
+        # nothing about the screen, so the caller decides what a ding is
+        # (curses.beep in the real program, a no-op by default)
+        self.bell = bell if bell is not None else (lambda: None)
         self.width = width
         self.autoreturn = autoreturn
         self.spacing_choices = (1, 1.5, 2)
@@ -23,30 +50,39 @@ class Typewriter():
         self.current_spacing = self.spacing_choices[self.spacing_index]
         self.buffer = []
         self.margin_bell = margin_bell
-        self.right_margin = width
+        if right_margin is None:
+            right_margin = width
+        self.right_margin = min(right_margin, width)
         self.left_margin = left_margin
         self.tab_bar = []
         self.tab_bar.extend('.' * self.width)
         self.margin_release = False
         self.tab_bar[self.left_margin] = "!"
-        self.tab_bar[self.right_margin - 1] = "!"
+        self.tab_bar[self._right_marker_index()] = "!"
         self.prev_buf_1 = ''
         self.prev_buf_2 = ''
         self.prev_buf_3 = ''
         self.today = strftime("%Y-%m-%d-%H%M%S")
         self.file_name = f"{self.today}.txt"
-        self.use_file = True
-        self.use_printer = True
+        self.use_file = use_file
+        self.use_printer = use_printer
         self.margin_hot_zone = False
         self.help_wanted = False
+        self.centre_mode = False
+        self.centre_chars = []
         self.word_count = 0
         self.line_count = 0
         self.save_folder = "./"
-        try:
-            self.p = Usb(0x04b8, 0x0047, 0)
-            self.printer_found = True
-        except:
-            self.printer_found = False
+        self.buffer.extend(" " * self.left_margin)
+        # column the next character will be typed at
+        self.cursor = len(self.buffer)
+        self.printer_found = False
+        if printer_vendor_id is not None and printer_product_id is not None:
+            try:
+                self.p = Usb(printer_vendor_id, printer_product_id, 0)
+                self.printer_found = True
+            except:
+                self.printer_found = False
 
 
     def __str__(self):
@@ -59,6 +95,10 @@ class Typewriter():
                 f"use printer = {self.use_printer}\n"
 
         return specs
+
+    def _right_marker_index(self):
+        """tab bar column used to show the right margin"""
+        return min(self.right_margin, self.width - 1)
 
     def give_buffer(self):
         return_string = "".join(self.buffer)
@@ -87,43 +127,51 @@ class Typewriter():
     def toggle_autoreturn(self):
             self.autoreturn = not self.autoreturn
 
-    def char_add(self, stdscr, key, pos):
-        """add a character to buffer but check margins etc"""
+    def char_add(self, key):
+        """add a character to buffer at the cursor but check margins etc"""
         logging.debug(f"buff len = {len(self.buffer)}")
         logging.debug(f"autortn = {self.autoreturn}")
+        if self.centre_mode:
+            self.centre_add(key)
+            return
         # if the buffer is at the margin bell point then 
         # make the bell ring and set the hot zone flag
         if (len(self.buffer) == (self.right_margin - self.margin_bell)):
-            curses.beep()
-            self.margin_hot_zone = not self.margin_hot_zone
+            self.bell()
+        self.margin_hot_zone = len(self.buffer) >= (self.right_margin - self.margin_bell)
 
         # if the buffer is less than the right margin but not longer
         # than the printable width then add character to the buffer
-        if ((len(self.buffer) < self.right_margin or self.margin_release) and (len(self.buffer) < self.width - 1)):
-            # if (len(self.buffer) < self.width):
-            self.buffer.insert(pos, key)
-        
-        # if the key is in the hot zone and autoreturn is on and 
-        # you hit space or hypen or reach the end of line 
+        fits = ((len(self.buffer) < self.right_margin or self.margin_release)
+                and (len(self.buffer) < self.width - 1))
+        if fits:
+            self.buffer.insert(self.cursor, key)
+            self.cursor += 1
+
+        # if the key is in the hot zone and autoreturn is on and
+        # you hit space or hypen or reach the end of line
         # then you will get an autoreturn
         # if you reach the end of the line and auto is not on then just ding
-        if (self.margin_hot_zone and key in (" ", "-") or pos == len(self.buffer)):
+        if ((self.margin_hot_zone and key in (" ", "-")) or not fits):
             if self.autoreturn:
-              self.carriage_return(stdscr)
+                self.carriage_return()
             else:
-                curses.beep()
+                self.bell()
                 
 
-    def backspace(self, stdscr, pos):
-        """move the cursor back one space and delete last char in buffer"""
-        # handle moving the print head cursor back one space
-        # should this be in its own def though?
-        self.clear_line_start(stdscr)
+    def backspace(self):
+        """move the cursor back one space and delete the char before it"""
+        if self.centre_mode:
+            if self.centre_chars:
+                self.centre_chars.pop()
+                self._layout_centre()
+            return
 
-        if (len(self.buffer) > 0):
+        if (len(self.buffer) > 0 and self.cursor > 0):
             logging.debug(f'length is {len(self.buffer)}')
-            logging.debug(f'position is {pos}')
-            self.buffer.pop(pos - 1)
+            logging.debug(f'position is {self.cursor}')
+            self.buffer.pop(self.cursor - 1)
+            self.cursor -= 1
     
     def buffer_ripple(self):
         """ bump all the buffers contents up the chain"""
@@ -132,7 +180,7 @@ class Typewriter():
         self.prev_buf_1 = self.give_buffer()
 
 
-    def carriage_return(self, stdscr):
+    def carriage_return(self):
         """record a carriage return and then depending on return mode
         do what needs to be done
         """
@@ -148,29 +196,25 @@ class Typewriter():
         #send contents of line to file if using file
         if (self.use_file):
             self.line_for_file = "".join(self.buffer)
+            file_path = path.join(self.save_folder, self.file_name)
             try:
-                with open(self.save_folder + self.file_name, 'a') as self.f1:
+                with open(file_path, 'a') as self.f1:
                     self.f1.write(self.line_for_file + "\n")
-            except:
-                print("problem with writing to the file")
-                quit()
+            except OSError as e:
+                raise SystemExit(f"problem writing to the file {file_path}: {e}")
 
         #send contents of line to printer
         if (self.use_printer and self.printer_found):
             self.send_to_printer(self.buffer)
 
-        # stdscr.addstr(10,0, "send to printer")
         self.buffer_ripple()
         self.buffer.clear()
         self.buffer.extend(" " * self.left_margin)
-        self.clear_line_start(  stdscr)
+        self.cursor = len(self.buffer)
         self.margin_release = False
+        self.centre_mode = False
+        self.centre_chars = []
         
-
-    def clear_line_start(self, stdscr):
-        """clear the cursor and text back to line start"""
-        stdscr.move(3, 0)
-        stdscr.clrtoeol()
 
     def send_to_printer(self, buffer):
         """ send buffer to the printer"""
@@ -200,28 +244,27 @@ class Typewriter():
         """ just move the carriage down the current line spacing amount"""
         pass
 
-    def margin_set_left(self, stdscr):
+    def margin_set_left(self):
         """ set the current cursor position as the left margin
         check that it is not further right than the right margin"""
-        
+        new_left = self.cursor
+        if new_left >= self.right_margin:
+            self.bell()
+            return
         self.tab_bar[self.left_margin] = "."
-        self.left_margin = stdscr.getyx()[1]
+        self.left_margin = new_left
         self.tab_bar[self.left_margin] = "!"
-        # self.left_margin = 10
-        stdscr.refresh()
 
-    def margin_set_right(self, stdscr):
+    def margin_set_right(self):
         """ set the current cursor position as the right margin
         check that it is not further left than the left margin"""
-        if (self.right_margin >= self.width):
-            self.tab_bar[self.right_margin - 1] = "."
-        else:        
-            self.tab_bar[self.right_margin] = "."
-        
-        self.right_margin = stdscr.getyx()[1]
-        self.tab_bar[self.right_margin] = "!"
-        # self.left_margin = 10
-        stdscr.refresh()
+        new_right = self.cursor
+        if new_right <= self.left_margin or new_right > self.width:
+            self.bell()
+            return
+        self.tab_bar[self._right_marker_index()] = "."
+        self.right_margin = new_right
+        self.tab_bar[self._right_marker_index()] = "!"
     
     def toggle_margin_release(self):
         """ allow the cursor to move further than the margins"""
@@ -237,8 +280,41 @@ class Typewriter():
         pass
 
     def centre_text(self):
-        """ move cursor to the centre of the buffer and centre align typed chars"""
-        pass
+        """ move cursor to the centre of the buffer and centre align typed chars
+
+        toggles centre mode. any text already typed on the line is picked up
+        and centred. while in centre mode every character typed re-centres
+        the line between the margins. a carriage return ends centre mode.
+        """
+        if self.centre_mode:
+            # leave the centred text where it is and carry on typing normally
+            self.centre_mode = False
+            self.centre_chars = []
+            return
+
+        self.centre_mode = True
+        self.centre_chars = list("".join(self.buffer).strip())
+        self._layout_centre()
+
+    def _centre_span(self):
+        """number of columns available between the margins"""
+        return self.right_margin - self.left_margin
+
+    def centre_add(self, key):
+        """add a character to the centred text, ding if it will not fit"""
+        if len(self.centre_chars) >= self._centre_span():
+            self.bell()
+            return
+        self.centre_chars.append(key)
+        self._layout_centre()
+
+    def _layout_centre(self):
+        """rebuild the buffer so the centre text sits midway between margins"""
+        text = "".join(self.centre_chars)
+        start = self.left_margin + (self._centre_span() - len(text)) // 2
+        self.buffer.clear()
+        self.buffer.extend(" " * start + text)
+        self.cursor = len(self.buffer)
 
     def right_margin_flush(self):
         """ move cursor to right margin and print text flush with right margin"""
@@ -253,12 +329,14 @@ class Typewriter():
 def show_help(stdscr):
     help_row = 11
     # stdscr.erase()
-    help_text = """alt + letter below:
+    help_text = f"""alt + letter below:
 l = set left margin  r = set right margin       s = toggle line spacing
 a = set autoreturn   n = toggle margin release  q = quit
+c = centre text (enter to finish)
+file path:{config['save_folder']}
 """
     if (my_machine.help_wanted):
-        stdscr.addstr(help_row, 0, f"{help_text}", curses.color_pair(5))
+        stdscr.addstr(help_row, 0, help_text, curses.color_pair(5))
 
 def show_handy_settings(stdscr, machine):
     handy_row = 6
@@ -268,6 +346,8 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr(handy_row, 17, f"A-RTN={my_machine.autoreturn}", curses.color_pair(5))
     stdscr.addstr(handy_row, 30, f"LM={my_machine.left_margin}", curses.color_pair(5))
     stdscr.addstr(handy_row, 36, f"RM={my_machine.right_margin}", curses.color_pair(5))
+    if my_machine.centre_mode:
+        stdscr.addstr(handy_row, 44, "CENTRE", curses.color_pair(2))
     stdscr.addstr((handy_row +1), 0, f"File={my_machine.file_name}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 0, f"Printer Found={my_machine.printer_found}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 20, f"LC={my_machine.line_count}", curses.color_pair(5))
@@ -280,25 +360,13 @@ def display(screen, my_machine):
 
 def key_check(stdscr, key):
     if 32 <= key <= 126:
-        _, cursy = stdscr.getyx()
+        my_machine.char_add(chr(key))
 
-        my_machine.char_add(stdscr, chr(key), cursy)
-        # not sure if this will be kept, gives column number
-        stdscr.erase()
-        # stdscr.addstr(15,0, str(cursy))
-    
     elif key in (curses.KEY_BACKSPACE, '\b', '\x7f', 127, 263):
-        _, cursx = stdscr.getyx()
-        logging.debug(f'cursor is at {cursx}')
-        # stdscr.addstr(15, 0, str(cursy))
-        my_machine.backspace(stdscr, cursx)
-        # not sure if this will be kept, gives column number
-        stdscr.erase()
-        # stdscr.addstr(15,0, str(cursy))
-
+        my_machine.backspace()
 
     elif key in (curses.KEY_ENTER, 13, 10):
-        my_machine.carriage_return(stdscr)
+        my_machine.carriage_return()
 
     elif key in (curses.KEY_LEFT, 260):
         pass
@@ -315,6 +383,7 @@ def key_check(stdscr, key):
         # curses.beep()
         stdscr.nodelay(True)
         key2 = stdscr.getch() # get the key pressed after ALT
+        stdscr.nodelay(False)
         if key2 == -1: # if there is no key after alt then esc was pressed
             # quit()
             pass
@@ -328,20 +397,22 @@ def key_check(stdscr, key):
             case 98:  # alt+b
                 # stdscr.addstr(16, 0, "you pressed alt+b")
                 pass
+            case 99: # alt+c toggle centre text
+                my_machine.centre_text()
             case 104: # alt+h toggle help
                 # invert the help wanted bool   
                 my_machine.toggle_help()
                 pass
             case 108: # alt+l set left margin
-                my_machine.margin_set_left(stdscr)
-                stdscr.erase()
-                # stdscr.addstr(16, 0, "you pressed alt+l")
+                my_machine.margin_set_left()
+                save_margins_to_config(my_machine.left_margin, my_machine.right_margin)
             case 110:
                 my_machine.toggle_margin_release()
             case 113: #alt+q pressed so quit
                 quit()
             case 114: #alt+r set right margin
-                my_machine.margin_set_right(stdscr)
+                my_machine.margin_set_right()
+                save_margins_to_config(my_machine.left_margin, my_machine.right_margin)
             case 115: # alt-s line spacing toggle
                 my_machine.toggle_line_space()
                 
@@ -360,6 +431,8 @@ def show_buffers(stdscr, my_machine):
     stdscr.addstr(2, 0, my_machine.give_prev_buff_1(), curses.color_pair(5))
     stdscr.clrtoeol()
     stdscr.addstr(3, 0, my_machine.give_buffer(), curses.color_pair(1))
+    # put the screen cursor where the machine says the next character goes
+    stdscr.move(3, my_machine.cursor)
 
 def setup_curses(stdscr):
     curses.start_color()
@@ -414,12 +487,12 @@ if __name__ == "__main__":
     logging.basicConfig(filename='type.log', encoding='utf-8', level=logging.INFO)
     logging.debug("starting...")
     term_col, term_row = get_terminal_size()
-    if (term_row < 15) or (term_col < 81):
+    if (term_row < 16) or (term_col < 81):
         print("terminal is too small please make it at least 16 lines by 81 columns")
         quit()
     
     # use the toml config file, returns it as a dict
-    with open("./config.toml", mode="rb") as fp:
+    with open(CONFIG_PATH, mode="rb") as fp:
         config = tomllib.load(fp)
 
     my_machine = Typewriter(
@@ -427,7 +500,13 @@ if __name__ == "__main__":
         autoreturn=config['autoreturn'],
         spacing_index=config['spacing_index'],
         margin_bell=config['margin_bell'],
-        left_margin=config['left_margin'])
+        left_margin=config['left_margin'],
+        right_margin=config.get('right_margin', config['width']),
+        use_file=config.get('use_file', True),
+        use_printer=config.get('use_printer', True),
+        printer_vendor_id=config.get('printer_vendor_id'),
+        printer_product_id=config.get('printer_product_id'),
+        bell=curses.beep)
     
     my_machine.save_folder = config['save_folder']
     if (len(argv) == 2):
@@ -440,7 +519,7 @@ if __name__ == "__main__":
     # use it for an esc sequence the line below calls 
     # a function that sets an env variable to adjust the delay
     set_shorter_esc_delay_in_os('150')  
-    curses,wrapper(main, my_machine)
+    wrapper(main, my_machine)
     # wrapper(main, my_machine)
 
 

@@ -1,0 +1,434 @@
+"""tests for the Typewriter class and config helpers
+
+run with:  venv/bin/python -m pytest
+"""
+import tomllib
+
+import pytest
+
+from type2 import Typewriter, save_margins_to_config
+
+
+# ----------------------------
+# helpers / fixtures
+# ----------------------------
+
+class Bell:
+    """stand-in for curses.beep that just counts dings"""
+    def __init__(self):
+        self.count = 0
+
+    def __call__(self):
+        self.count += 1
+
+
+@pytest.fixture
+def bell():
+    return Bell()
+
+
+@pytest.fixture
+def make(bell):
+    """build a Typewriter with no file or printer output"""
+    def _make(**kwargs):
+        kwargs.setdefault("width", 75)
+        kwargs.setdefault("use_file", False)
+        kwargs.setdefault("use_printer", False)
+        return Typewriter(bell=bell, **kwargs)
+    return _make
+
+
+def type_text(machine, text):
+    for ch in text:
+        machine.char_add(ch)
+
+
+def fill_to(machine, length):
+    """put the machine at a given line length with the cursor at the end"""
+    machine.buffer[:] = list("x" * length)
+    machine.cursor = length
+
+
+# ----------------------------
+# setup
+# ----------------------------
+
+def test_first_line_starts_at_left_margin(make):
+    t = make(left_margin=5)
+    assert t.give_buffer() == " " * 5
+    assert t.cursor == 5
+
+
+def test_right_margin_defaults_to_width(make):
+    assert make().right_margin == 75
+
+
+def test_right_margin_clamped_to_width(make):
+    assert make(right_margin=100).right_margin == 75
+
+
+def test_tab_bar_shows_margins(make):
+    bar = make(left_margin=5, right_margin=60).give_tab_bar()
+    assert bar[5] == "!"
+    assert bar[60] == "!"
+    assert bar.count("!") == 2
+
+
+def test_tab_bar_right_marker_at_full_width(make):
+    bar = make(right_margin=75).give_tab_bar()
+    assert len(bar) == 75
+    assert bar[74] == "!"
+
+
+# ----------------------------
+# typing and backspace
+# ----------------------------
+
+def test_typing_adds_chars_and_moves_cursor(make):
+    t = make()
+    type_text(t, "hello")
+    assert t.give_buffer() == "hello"
+    assert t.cursor == 5
+
+
+def test_backspace_removes_last_char(make):
+    t = make()
+    type_text(t, "hello")
+    t.backspace()
+    assert t.give_buffer() == "hell"
+    assert t.cursor == 4
+
+
+def test_backspace_at_column_zero_does_nothing(make):
+    t = make()
+    t.backspace()
+    assert t.give_buffer() == ""
+    assert t.cursor == 0
+
+
+def test_backspace_with_text_but_cursor_at_zero_keeps_text(make):
+    t = make()
+    type_text(t, "abc")
+    t.cursor = 0
+    t.backspace()
+    assert t.give_buffer() == "abc"
+
+
+def test_full_line_rejects_char_and_dings(make, bell):
+    t = make(right_margin=60)
+    fill_to(t, 60)
+    t.char_add("q")
+    assert len(t.buffer) == 60
+    assert bell.count >= 1
+
+
+def test_margin_release_allows_typing_past_right_margin(make):
+    t = make(right_margin=60)
+    fill_to(t, 60)
+    t.toggle_margin_release()
+    t.char_add("q")
+    assert len(t.buffer) == 61
+
+
+def test_never_types_past_printable_width(make):
+    t = make(right_margin=75)
+    t.toggle_margin_release()
+    fill_to(t, 74)
+    t.char_add("q")
+    assert len(t.buffer) == 74
+
+
+# ----------------------------
+# margin bell and autoreturn
+# ----------------------------
+
+def test_margin_bell_rings_at_bell_point(make, bell):
+    t = make(right_margin=60, margin_bell=8)
+    fill_to(t, 51)
+    t.char_add("a")
+    assert bell.count == 0
+    t.char_add("b")          # buffer was 52 = 60 - 8
+    assert bell.count == 1
+    assert t.margin_hot_zone
+
+
+def test_hot_zone_survives_backspace_and_retype(make):
+    t = make(right_margin=60, margin_bell=8)
+    fill_to(t, 52)
+    t.char_add("a")
+    t.backspace()
+    t.char_add("a")
+    assert t.margin_hot_zone
+
+
+def test_not_in_hot_zone_before_bell_point(make):
+    t = make(right_margin=60, margin_bell=8)
+    type_text(t, "short")
+    assert not t.margin_hot_zone
+
+
+def test_space_in_hot_zone_dings_without_autoreturn(make, bell):
+    t = make(right_margin=60, margin_bell=8, autoreturn=False)
+    fill_to(t, 55)
+    before = bell.count
+    t.char_add(" ")
+    assert bell.count == before + 1
+    assert t.line_count == 0
+
+
+@pytest.mark.parametrize("key", [" ", "-"])
+def test_space_or_hyphen_in_hot_zone_autoreturns(make, key):
+    t = make(right_margin=60, margin_bell=8, autoreturn=True, left_margin=3)
+    fill_to(t, 55)
+    t.char_add(key)
+    assert t.line_count == 1
+    assert t.give_buffer() == " " * 3
+    assert t.cursor == 3
+
+
+def test_letters_in_hot_zone_do_not_autoreturn(make):
+    t = make(right_margin=60, margin_bell=8, autoreturn=True)
+    fill_to(t, 55)
+    t.char_add("a")
+    assert t.line_count == 0
+
+
+def test_toggle_autoreturn(make):
+    t = make(autoreturn=False)
+    t.toggle_autoreturn()
+    assert t.autoreturn
+    t.toggle_autoreturn()
+    assert not t.autoreturn
+
+
+# ----------------------------
+# carriage return and history
+# ----------------------------
+
+def test_carriage_return_resets_line(make):
+    t = make(left_margin=4)
+    type_text(t, "words here")
+    t.carriage_return()
+    assert t.give_buffer() == " " * 4
+    assert t.cursor == 4
+    assert t.line_count == 1
+    assert t.word_count == 2
+
+
+def test_carriage_return_clears_margin_release(make):
+    t = make()
+    t.toggle_margin_release()
+    t.carriage_return()
+    assert not t.margin_release
+
+
+def test_previous_lines_ripple_up(make):
+    t = make()
+    for line in ("one", "two", "three", "four"):
+        type_text(t, line)
+        t.carriage_return()
+    assert t.give_prev_buff_1() == "four"
+    assert t.give_prev_buff_2() == "three"
+    assert t.give_prev_buff_3() == "two"
+
+
+def test_carriage_return_writes_line_to_file(make, tmp_path):
+    t = make(use_file=True)
+    t.save_folder = str(tmp_path)      # no trailing slash on purpose
+    type_text(t, "first")
+    t.carriage_return()
+    type_text(t, "second")
+    t.carriage_return()
+    assert (tmp_path / t.file_name).read_text() == "first\nsecond\n"
+
+
+def test_unwritable_save_folder_exits_with_message(make):
+    t = make(use_file=True)
+    t.save_folder = "/nonexistent/folder"
+    with pytest.raises(SystemExit, match="problem writing to the file"):
+        t.carriage_return()
+
+
+# ----------------------------
+# line spacing
+# ----------------------------
+
+def test_line_spacing_cycles(make):
+    t = make(spacing_index=0)
+    seen = [t.current_spacing]
+    for _ in range(3):
+        t.toggle_line_space()
+        seen.append(t.current_spacing)
+    assert seen == [1, 1.5, 2, 1]
+
+
+# ----------------------------
+# margins
+# ----------------------------
+
+def test_set_left_margin_at_cursor(make):
+    t = make(left_margin=5, right_margin=60)
+    t.cursor = 20
+    t.margin_set_left()
+    assert t.left_margin == 20
+    bar = t.give_tab_bar()
+    assert bar[20] == "!" and bar[5] == "."
+
+
+def test_left_margin_cannot_pass_right_margin(make, bell):
+    t = make(left_margin=5, right_margin=60)
+    t.cursor = 60
+    t.margin_set_left()
+    assert t.left_margin == 5
+    assert bell.count == 1
+
+
+def test_set_right_margin_at_cursor(make):
+    t = make(left_margin=5, right_margin=60)
+    t.cursor = 70
+    t.margin_set_right()
+    assert t.right_margin == 70
+    bar = t.give_tab_bar()
+    assert bar[70] == "!" and bar[60] == "."
+
+
+def test_right_margin_can_be_set_to_full_width(make):
+    t = make(right_margin=60)
+    t.cursor = 75
+    t.margin_set_right()
+    assert t.right_margin == 75
+    assert t.give_tab_bar()[74] == "!"
+
+
+@pytest.mark.parametrize("column", [5, 2, 76])
+def test_invalid_right_margin_rejected(make, bell, column):
+    t = make(left_margin=5, right_margin=60)
+    t.cursor = column
+    t.margin_set_right()
+    assert t.right_margin == 60
+    assert bell.count == 1
+
+
+# ----------------------------
+# centring
+# ----------------------------
+
+def test_centre_text_centres_between_margins(make):
+    t = make(left_margin=10, right_margin=60)
+    t.centre_text()
+    type_text(t, "Chapter One")
+    line = t.give_buffer()
+    assert line.strip() == "Chapter One"
+    assert line.index("C") == 10 + (50 - 11) // 2
+    assert t.cursor == len(line)
+
+
+def test_centre_picks_up_existing_text(make):
+    t = make(left_margin=10, right_margin=60)
+    type_text(t, "Title")
+    t.centre_text()
+    assert t.give_buffer().index("T") == 10 + (50 - 5) // 2
+
+
+def test_centre_backspace_recentres(make):
+    t = make(left_margin=0, right_margin=60)
+    t.centre_text()
+    type_text(t, "abcd")
+    t.backspace()
+    line = t.give_buffer()
+    assert line.strip() == "abc"
+    assert line.index("a") == (60 - 3) // 2
+
+
+def test_centre_backspace_on_empty_does_nothing(make):
+    t = make()
+    t.centre_text()
+    t.backspace()
+    assert t.centre_mode
+    assert t.give_buffer().strip() == ""
+
+
+def test_centre_dings_when_full(make, bell):
+    t = make(left_margin=0, right_margin=10)
+    t.centre_text()
+    type_text(t, "x" * 10)
+    before = bell.count
+    t.char_add("y")
+    assert bell.count == before + 1
+    assert t.give_buffer() == "x" * 10
+
+
+def test_carriage_return_ends_centre_mode(make):
+    t = make(left_margin=10, right_margin=60)
+    t.centre_text()
+    type_text(t, "Hi")
+    t.carriage_return()
+    assert not t.centre_mode
+    assert t.give_prev_buff_1().strip() == "Hi"
+    assert t.give_buffer() == " " * 10
+
+
+def test_toggling_centre_off_keeps_text(make):
+    t = make(left_margin=0, right_margin=60)
+    t.centre_text()
+    type_text(t, "Hi")
+    centred = t.give_buffer()
+    t.centre_text()
+    assert not t.centre_mode
+    t.char_add("!")
+    assert t.give_buffer() == centred + "!"
+
+
+# ----------------------------
+# printer
+# ----------------------------
+
+def test_no_printer_ids_means_no_printer(make):
+    t = make(use_printer=True)
+    assert not t.printer_found
+
+
+# ----------------------------
+# config saving
+# ----------------------------
+
+CONFIG_WITH_COMMENTS = """\
+width = 75
+margin_bell = 8 # numbers of spaces from left margin to bell
+right_margin = 75 # set the distance to the right margin
+left_margin = 0
+save_folder = "/somewhere/"
+"""
+
+
+def test_save_margins_updates_values_and_keeps_comments(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(CONFIG_WITH_COMMENTS)
+    save_margins_to_config(10, 62, cfg)
+    text = cfg.read_text()
+    assert "right_margin = 62 # set the distance to the right margin" in text
+    assert "left_margin = 10\n" in text
+    assert "margin_bell = 8 # numbers" in text
+    data = tomllib.loads(text)
+    assert data["left_margin"] == 10
+    assert data["right_margin"] == 62
+    assert data["width"] == 75
+
+
+def test_save_margins_adds_missing_keys(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('width = 75\nsave_folder = "x"')     # no trailing newline
+    save_margins_to_config(3, 70, cfg)
+    data = tomllib.loads(cfg.read_text())
+    assert data["left_margin"] == 3
+    assert data["right_margin"] == 70
+    assert data["save_folder"] == "x"
+
+
+def test_save_margins_does_not_touch_similar_keys(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("left_margin = 0\nright_margin = 75\nold_left_margin = 9\n")
+    save_margins_to_config(4, 50, cfg)
+    data = tomllib.loads(cfg.read_text())
+    assert data["old_left_margin"] == 9
+    assert data["left_margin"] == 4
