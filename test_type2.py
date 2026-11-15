@@ -383,6 +383,101 @@ def test_toggling_centre_off_keeps_text(make):
 
 
 # ----------------------------
+# line editing
+# ----------------------------
+
+def test_arrows_move_cursor_and_typing_inserts(make):
+    t = make()
+    type_text(t, "helo")
+    t.cursor_left()
+    t.char_add("l")
+    assert t.give_buffer() == "hello"
+    assert t.cursor == 4
+
+
+def test_cursor_stops_at_ends_and_dings(make, bell):
+    t = make()
+    type_text(t, "ab")
+    t.cursor_right()
+    assert t.cursor == 2 and bell.count == 1
+    t.cursor_left(); t.cursor_left(); t.cursor_left()
+    assert t.cursor == 0 and bell.count == 2
+
+
+def test_backspace_mid_line(make):
+    t = make()
+    type_text(t, "abXc")
+    t.cursor_left()
+    t.backspace()
+    assert t.give_buffer() == "abc"
+    assert t.cursor == 2
+
+
+def test_delete_under_cursor(make):
+    t = make()
+    type_text(t, "abXc")
+    t.cursor_left(); t.cursor_left()
+    t.delete()
+    assert t.give_buffer() == "abc"
+    assert t.cursor == 2
+    t.cursor_end()
+    t.delete()                      # nothing under the cursor at the end
+    assert t.give_buffer() == "abc"
+
+
+def test_home_goes_to_margin_then_line_start(make):
+    t = make(left_margin=5)
+    type_text(t, "hello")
+    t.cursor_home()
+    assert t.cursor == 5
+    t.cursor_home()
+    assert t.cursor == 0
+    t.cursor_end()
+    assert t.cursor == 10
+
+
+def test_insert_on_full_line_dings_without_changing_it(make, bell):
+    t = make(right_margin=10, autoreturn=True)
+    type_text(t, "abcdefghij")
+    t.cursor_home()
+    bell.count = 0
+    t.char_add("X")
+    assert t.give_buffer() == "abcdefghij"
+    assert t.line_count == 0            # no autoreturn mid-line
+    assert bell.count >= 1
+
+
+def test_space_mid_line_in_hot_zone_does_not_autoreturn(make):
+    t = make(right_margin=20, margin_bell=8, autoreturn=True)
+    type_text(t, "abcdefghijklmn")      # into the hot zone
+    t.cursor_left(); t.cursor_left()
+    t.char_add(" ")
+    assert t.line_count == 0
+    assert t.give_buffer() == "abcdefghijkl mn"
+
+
+def test_edited_line_is_what_gets_printed(make):
+    printer = FakePrinter()
+    t = make(use_printer=True, printer=printer)
+    type_text(t, "teh cat")
+    t.cursor_home()
+    t.cursor_right(); t.cursor_right()
+    t.delete()
+    t.cursor_left()
+    t.char_add("h")
+    t.carriage_return()
+    assert printer.lines[0][0] == "the cat"
+
+
+def test_arrows_ignored_in_align_mode(make, bell):
+    t = make(right_margin=20)
+    t.right_justify()
+    type_text(t, "ab")
+    t.cursor_left()
+    assert t.cursor == 20 and bell.count == 1
+
+
+# ----------------------------
 # right justify
 # ----------------------------
 

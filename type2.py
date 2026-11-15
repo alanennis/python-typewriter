@@ -192,6 +192,9 @@ class Typewriter():
         # than the printable width then add character to the buffer
         fits = ((len(self.buffer) < self.right_margin or self.margin_release)
                 and (len(self.buffer) < self.width - 1))
+        # typing in the middle of the line (after moving back with the
+        # arrow keys) inserts, and must never trigger an autoreturn
+        at_end = self.cursor == len(self.buffer)
         if fits:
             self.buffer.insert(self.cursor, key)
             self.cursor += 1
@@ -201,7 +204,7 @@ class Typewriter():
         # then you will get an autoreturn
         # if you reach the end of the line and auto is not on then just ding
         if ((self.margin_hot_zone and key in (" ", "-")) or not fits):
-            if self.autoreturn:
+            if self.autoreturn and at_end:
                 self.carriage_return()
             else:
                 self.bell()
@@ -220,6 +223,41 @@ class Typewriter():
             logging.debug(f'position is {self.cursor}')
             self.buffer.pop(self.cursor - 1)
             self.cursor -= 1
+
+    def delete(self):
+        """delete the character under the cursor"""
+        if self.align:
+            return
+        if self.cursor < len(self.buffer):
+            self.buffer.pop(self.cursor)
+
+    def cursor_left(self):
+        """move the cursor one place left, ding at the start of the line"""
+        if self.align or self.cursor == 0:
+            self.bell()
+            return
+        self.cursor -= 1
+
+    def cursor_right(self):
+        """move the cursor one place right, ding at the end of the text"""
+        if self.align or self.cursor >= len(self.buffer):
+            self.bell()
+            return
+        self.cursor += 1
+
+    def cursor_home(self):
+        """move the cursor to the left margin, or to the very start of
+        the line if it is already at (or left of) the margin"""
+        if self.align:
+            return
+        margin = min(self.left_margin, len(self.buffer))
+        self.cursor = margin if self.cursor > margin else 0
+
+    def cursor_end(self):
+        """move the cursor to the end of the text"""
+        if self.align:
+            return
+        self.cursor = len(self.buffer)
 
     def buffer_ripple(self):
         """ bump all the buffers contents up the chain"""
@@ -366,7 +404,7 @@ class Typewriter():
 
 def show_help(stdscr, machine):
     help_row = 11
-    help_text = f"""alt + letter below:
+    help_text = f"""arrows/home/end move along the line, del deletes.  alt + letter below:
 l = set left margin  r = set right margin       s = toggle line spacing
 a = set autoreturn   n = toggle margin release  q = quit
 c = centre text       j = right justify (enter to finish)
@@ -404,6 +442,21 @@ def key_check(stdscr, key, machine):
 
     elif key in (curses.KEY_ENTER, 13, 10):
         machine.carriage_return()
+
+    elif key == curses.KEY_LEFT:
+        machine.cursor_left()
+
+    elif key == curses.KEY_RIGHT:
+        machine.cursor_right()
+
+    elif key == curses.KEY_HOME:
+        machine.cursor_home()
+
+    elif key == curses.KEY_END:
+        machine.cursor_end()
+
+    elif key == curses.KEY_DC:
+        machine.delete()
 
     elif key == 27:
         # alt+key arrives as esc followed by the key. a lone esc gives -1
@@ -542,8 +595,6 @@ if __name__ == "__main__":
     run()
 
 
-# TODO in line editing of line before sending to the printer/file
-#      (arrow keys to move the cursor along the line)
 # TODO tabs: alt+tab to jump to the next tab stop (or right margin if none),
 #      set a tab stop at the cursor, clear all tabs but not margins
 # TODO line feed: move the carriage down without a carriage return
