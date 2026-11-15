@@ -18,10 +18,17 @@ curses and tomllib (built in)
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 venv/bin/python type2.py
+venv/bin/python type2.py --printer zebra   # or -p epson, overrides config
 ```
 
 settings live in `config.toml`. left and right margins are saved
 back to it when you set them.
+
+set `printer` to `"epson"` for the ESC/POS dot matrix printer or `"zebra"`
+for the Zebra GK420d thermal printer. the zebra prints each line as a tiny
+label, upside down by default so a torn-off strip reads in order
+(`zebra_upright = true` turns that off). `zebra_lines.py` on its own
+is a quick line-at-a-time test for the zebra.
 
 ## tests
 

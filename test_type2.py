@@ -6,7 +6,10 @@ import tomllib
 
 import pytest
 
-from type2 import Typewriter, save_margins_to_config
+from zebra_lines import LEFT, line_zpl
+
+from type2 import (Typewriter, open_printer, parse_args, printer_name,
+                   save_margins_to_config, save_settings_to_config)
 
 
 # ----------------------------
@@ -380,12 +383,144 @@ def test_toggling_centre_off_keeps_text(make):
 
 
 # ----------------------------
+# right justify
+# ----------------------------
+
+def test_right_justify_sits_against_right_margin(make):
+    t = make(left_margin=5, right_margin=40)
+    t.right_justify()
+    type_text(t, "hello")
+    assert t.give_buffer() == " " * 35 + "hello"
+    assert t.cursor == 40
+
+
+def test_right_justify_picks_up_existing_text(make):
+    t = make(right_margin=20)
+    type_text(t, "abc")
+    t.right_justify()
+    assert t.give_buffer() == " " * 17 + "abc"
+
+
+def test_right_justify_backspace(make):
+    t = make(right_margin=20)
+    t.right_justify()
+    type_text(t, "abcd")
+    t.backspace()
+    assert t.give_buffer() == " " * 17 + "abc"
+
+
+def test_right_justify_dings_when_full(make, bell):
+    t = make(left_margin=0, right_margin=4)
+    t.right_justify()
+    type_text(t, "abcd")
+    bell.count = 0
+    t.char_add("e")
+    assert t.give_buffer() == "abcd"
+    assert bell.count == 1
+
+
+def test_right_justify_line_is_printed_aligned(make):
+    printer = FakePrinter()
+    t = make(right_margin=10, use_printer=True, printer=printer)
+    t.right_justify()
+    type_text(t, "end")
+    t.carriage_return()
+    assert printer.lines[0][0] == " " * 7 + "end"
+    assert printer.aligns == ["right"]
+    assert not t.right_mode
+    assert t.give_buffer() == ""
+
+
+def test_switch_from_centre_to_right(make):
+    t = make(right_margin=20)
+    t.centre_text()
+    type_text(t, "ab")
+    t.right_justify()
+    assert t.right_mode and not t.centre_mode
+    assert t.give_buffer() == " " * 18 + "ab"
+
+
+def test_toggling_right_off_keeps_text(make, bell):
+    t = make(right_margin=20)
+    t.right_justify()
+    type_text(t, "ab")
+    t.right_justify()
+    assert not t.right_mode
+    assert t.give_buffer() == " " * 18 + "ab"
+    # already at the right margin, so normal typing just dings
+    bell.count = 0
+    t.char_add("!")
+    assert t.give_buffer() == " " * 18 + "ab"
+    assert bell.count >= 1
+
+
+
+# ----------------------------
 # printer
 # ----------------------------
 
 def test_no_printer_ids_means_no_printer(make):
     t = make(use_printer=True)
     assert not t.printer_found
+
+
+class FakePrinter:
+    """records what would have been printed"""
+    def __init__(self):
+        self.lines = []
+        self.aligns = []
+
+    def print_line(self, text, spacing=1, align=None):
+        self.lines.append((text, spacing))
+        self.aligns.append(align)
+
+
+def test_carriage_return_sends_line_and_spacing_to_printer(make):
+    printer = FakePrinter()
+    t = make(use_printer=True, printer=printer)
+    assert t.printer_found
+    type_text(t, "hello")
+    t.toggle_line_space()   # 1.5 -> 2
+    t.carriage_return()
+    assert printer.lines == [("hello", 2)]
+
+
+def test_printer_not_used_when_use_printer_off(make):
+    printer = FakePrinter()
+    t = make(use_printer=False, printer=printer)
+    type_text(t, "hello")
+    t.carriage_return()
+    assert printer.lines == []
+
+
+def test_unknown_printer_type_exits():
+    with pytest.raises(SystemExit):
+        open_printer({"printer": "laser"})
+
+
+def test_missing_epson_ids_gives_no_printer():
+    assert open_printer({"printer": "epson"}) is None
+
+
+def test_printer_option_on_command_line():
+    assert parse_args(["--printer", "zebra"]).printer == "zebra"
+    assert parse_args(["-p", "epson"]).printer == "epson"
+    assert parse_args([]).printer is None   # fall back to config
+
+
+def test_printer_name_defaults_to_epson():
+    assert printer_name({}) == "epson"
+    assert printer_name({"printer": "Zebra"}) == "zebra"
+
+
+def test_bad_printer_option_rejected():
+    with pytest.raises(SystemExit):
+        parse_args(["--printer", "laser"])
+
+
+def test_use_file_argument_still_works():
+    assert parse_args(["False", "-p", "zebra"]).use_file == "False"
+    assert parse_args([]).use_file is None
 
 
 # ----------------------------
@@ -432,3 +567,64 @@ def test_save_margins_does_not_touch_similar_keys(tmp_path):
     data = tomllib.loads(cfg.read_text())
     assert data["old_left_margin"] == 9
     assert data["left_margin"] == 4
+
+
+def test_save_line_spacing_keeps_comment(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("width = 75\nspacing_index = 1 # 1.5 line spacing\n")
+    save_settings_to_config({"spacing_index": 2}, cfg)
+    text = cfg.read_text()
+    assert "spacing_index = 2 # 1.5 line spacing" in text
+    assert tomllib.loads(text)["width"] == 75
+
+
+def test_saved_spacing_index_restores_spacing(make):
+    t = make()
+    t.toggle_line_space()           # 1.5 -> 2
+    restored = make(spacing_index=t.spacing_index)
+    assert restored.current_spacing == 2
+
+
+# ----------------------------
+# zebra line layout
+# ----------------------------
+
+def test_zebra_right_justify_ends_at_margin_column():
+    zpl = line_zpl(" " * 60 + "end", align="right", char_dots=12)
+    # block from the left edge to column 63, text right aligned in it
+    assert f"^FO{LEFT},5" in zpl
+    assert "^FB756,1,0,R^FDend^FS" in zpl
+
+
+def test_zebra_indent_uses_column_width_not_spaces():
+    zpl = line_zpl("     hello", char_dots=12)
+    assert f"^FO{LEFT + 60},5" in zpl
+    assert "^FDhello^FS" in zpl
+
+
+def test_zebra_centre_is_centred_on_text_middle():
+    # text occupies columns 20-30, so its middle is column 25
+    zpl = line_zpl(" " * 20 + "x" * 10, align="centre", char_dots=10)
+    assert f"^FO{LEFT},5" in zpl            # block 0..500 dots
+    assert "^FB500,1,0,C" in zpl
+
+
+def test_zebra_blank_line_still_feeds_paper():
+    zpl = line_zpl("     ")
+    assert "^FD" not in zpl
+    assert "^GB1,1,1,W^FS" in zpl           # invisible field so it prints
+    assert "^LL40" in zpl
+
+
+def test_blank_carriage_return_sends_blank_line_to_printer(make):
+    printer = FakePrinter()
+    t = make(left_margin=4, use_printer=True, printer=printer)
+    t.carriage_return()
+    t.toggle_line_space()   # 1.5 -> 2
+    t.carriage_return()
+    assert printer.lines == [("    ", 1.5), ("    ", 2)]
+
+
+def test_zebra_right_justify_clamped_to_paper():
+    zpl = line_zpl(" " * 90 + "end", align="right", char_dots=12)
+    assert "^FB772,1,0,R" in zpl

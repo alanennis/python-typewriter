@@ -7,16 +7,16 @@ import tomllib
 import logging
 import re
 from pathlib import Path
-from sys import argv
+import argparse
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 
-def save_margins_to_config(left_margin, right_margin, config_path=CONFIG_PATH):
-    """write the margin values back to the config file, leaving the
-    rest of the file (including comments) untouched"""
+def save_settings_to_config(settings, config_path=CONFIG_PATH):
+    """write whole number settings (a dict of key: value) back to the
+    config file, leaving the rest of the file (including comments) untouched"""
     text = config_path.read_text()
-    for key, value in (("left_margin", left_margin), ("right_margin", right_margin)):
+    for key, value in settings.items():
         pattern = rf"^({key}\s*=\s*)\d+"
         if re.search(pattern, text, flags=re.MULTILINE):
             text = re.sub(pattern, rf"\g<1>{value}", text, count=1, flags=re.MULTILINE)
@@ -27,6 +27,56 @@ def save_margins_to_config(left_margin, right_margin, config_path=CONFIG_PATH):
     config_path.write_text(text)
 
 
+def save_margins_to_config(left_margin, right_margin, config_path=CONFIG_PATH):
+    """write the margin values back to the config file"""
+    save_settings_to_config({"left_margin": left_margin,
+                             "right_margin": right_margin}, config_path)
+
+
+class EpsonPrinter():
+    """dot matrix printer that speaks ESC/POS over USB"""
+    # line_spacing values for 1, 1.5 and double spacing
+    RAW_SPACING = {1: 30, 1.5: 40, 2: 60}
+
+    def __init__(self, vendor_id, product_id):
+        self.p = Usb(vendor_id, product_id, 0)
+
+    def print_line(self, text, spacing=1, align=None):
+        # every character is the same width on the dot matrix, so the
+        # spaces in the line already put it in the right place
+        self.p.line_spacing(self.RAW_SPACING[spacing])
+        self.p.text(text)
+        self.p.text("\n")
+
+
+def printer_name(config):
+    """which printer the config asks for, epson if it doesn't say"""
+    return config.get('printer', 'epson').lower()
+
+
+def open_printer(config):
+    """build the printer named by `printer` in the config ("epson" or
+    "zebra"). returns None if it can't be found, so the typewriter
+    still runs without one"""
+    kind = printer_name(config)
+    try:
+        if kind == 'epson':
+            return EpsonPrinter(config['printer_vendor_id'],
+                                config['printer_product_id'])
+        if kind == 'zebra':
+            from zebra_lines import ZebraLinePrinter
+            return ZebraLinePrinter(
+                device=config.get('zebra_device'),
+                continuous=config.get('zebra_continuous', False),
+                upright=config.get('zebra_upright', False),
+                darkness=config.get('zebra_darkness'),
+                char_dots=config.get('zebra_char_dots'))
+    except Exception as e:
+        logging.warning(f"could not open {kind} printer: {e}")
+        return None
+    raise SystemExit(f'unknown printer "{kind}" in config, use "epson" or "zebra"')
+
+
 def set_shorter_esc_delay_in_os(delay_ms):
     environ.setdefault('ESCDELAY', delay_ms)
 
@@ -35,8 +85,7 @@ class Typewriter():
                 autoreturn=False, margin_bell=8,
                 left_margin = 0, right_margin = None,
                 use_file = True, use_printer = True,
-                printer_vendor_id = None, printer_product_id = None,
-                bell = None):
+                printer = None, printer_name = "none", bell = None):
         # bell is called whenever the machine wants to ding. the class knows
         # nothing about the screen, so the caller decides what a ding is
         # (curses.beep in the real program, a no-op by default)
@@ -66,21 +115,22 @@ class Typewriter():
         self.use_printer = use_printer
         self.margin_hot_zone = False
         self.help_wanted = False
-        self.centre_mode = False
-        self.centre_chars = []
+        # None, "centre" or "right" while aligning the line being typed
+        self.align = None
+        self.align_chars = []
         self.word_count = 0
         self.line_count = 0
         self.save_folder = "./"
         self.buffer.extend(" " * self.left_margin)
         # column the next character will be typed at
         self.cursor = len(self.buffer)
-        self.printer_found = False
-        if printer_vendor_id is not None and printer_product_id is not None:
-            try:
-                self.p = Usb(printer_vendor_id, printer_product_id, 0)
-                self.printer_found = True
-            except:
-                self.printer_found = False
+        # printer is any object with print_line(text, spacing, align), or None.
+        # every carriage return calls it, blank lines included, and the
+        # printer must feed a line for a blank one just as for text
+        self.printer = printer
+        self.printer_found = printer is not None
+        # name of the chosen printer, shown on screen even if not found
+        self.printer_name = printer_name
 
 
     def __str__(self):
@@ -129,8 +179,8 @@ class Typewriter():
         """add a character to buffer at the cursor but check margins etc"""
         logging.debug(f"buff len = {len(self.buffer)}")
         logging.debug(f"autortn = {self.autoreturn}")
-        if self.centre_mode:
-            self.centre_add(key)
+        if self.align:
+            self.align_add(key)
             return
         # if the buffer is at the margin bell point then
         # make the bell ring and set the hot zone flag
@@ -159,10 +209,10 @@ class Typewriter():
 
     def backspace(self):
         """move the cursor back one space and delete the char before it"""
-        if self.centre_mode:
-            if self.centre_chars:
-                self.centre_chars.pop()
-                self._layout_centre()
+        if self.align:
+            if self.align_chars:
+                self.align_chars.pop()
+                self._layout_align()
             return
 
         if (len(self.buffer) > 0 and self.cursor > 0):
@@ -210,21 +260,15 @@ class Typewriter():
         self.buffer.extend(" " * self.left_margin)
         self.cursor = len(self.buffer)
         self.margin_release = False
-        self.centre_mode = False
-        self.centre_chars = []
+        self.align = None
+        self.align_chars = []
 
 
     def send_to_printer(self, buffer):
         """ send buffer to the printer"""
-        if self.current_spacing == 1: self.raw_spacing = 30
-        if self.current_spacing == 1.5: self.raw_spacing = 40
-        if self.current_spacing == 2: self.raw_spacing = 60
-
         if self.printer_found:
-            self.p.line_spacing(self.raw_spacing)
-            self.printer_line = "".join(buffer)
-            self.p.text(self.printer_line)
-            self.p.text("\n")
+            self.printer.print_line("".join(buffer), self.current_spacing,
+                                    self.align)
 
     def margin_set_left(self):
         """ set the current cursor position as the left margin
@@ -252,39 +296,62 @@ class Typewriter():
         """ allow the cursor to move further than the margins"""
         self.margin_release = not self.margin_release
 
-    def centre_text(self):
-        """ move cursor to the centre of the buffer and centre align typed chars
+    @property
+    def centre_mode(self):
+        return self.align == "centre"
 
-        toggles centre mode. any text already typed on the line is picked up
-        and centred. while in centre mode every character typed re-centres
-        the line between the margins. a carriage return ends centre mode.
+    @property
+    def right_mode(self):
+        return self.align == "right"
+
+    def centre_text(self):
+        """ toggle centre mode: typed text stays midway between the margins"""
+        self._toggle_align("centre")
+
+    def right_justify(self):
+        """ toggle right justify: typed text stays flush with the right margin"""
+        self._toggle_align("right")
+
+    def _toggle_align(self, mode):
+        """switch an alignment mode on or off
+
+        any text already typed on the line is picked up and aligned. while
+        the mode is on every character typed re-aligns the line. turning it
+        off leaves the text where it is so you can carry on typing normally.
+        a carriage return also ends it. switching straight from one mode to
+        the other re-aligns the text.
         """
-        if self.centre_mode:
-            # leave the centred text where it is and carry on typing normally
-            self.centre_mode = False
-            self.centre_chars = []
+        if self.align == mode:
+            self.align = None
+            self.align_chars = []
             return
 
-        self.centre_mode = True
-        self.centre_chars = list("".join(self.buffer).strip())
-        self._layout_centre()
+        if self.align is None:
+            self.align_chars = list("".join(self.buffer).strip())
+        self.align = mode
+        self._layout_align()
 
-    def _centre_span(self):
+    def _align_span(self):
         """number of columns available between the margins"""
         return self.right_margin - self.left_margin
 
-    def centre_add(self, key):
-        """add a character to the centred text, ding if it will not fit"""
-        if len(self.centre_chars) >= self._centre_span():
+    def align_add(self, key):
+        """add a character to the aligned text, ding if it will not fit"""
+        if len(self.align_chars) >= self._align_span():
             self.bell()
             return
-        self.centre_chars.append(key)
-        self._layout_centre()
+        self.align_chars.append(key)
+        self._layout_align()
 
-    def _layout_centre(self):
-        """rebuild the buffer so the centre text sits midway between margins"""
-        text = "".join(self.centre_chars)
-        start = self.left_margin + (self._centre_span() - len(text)) // 2
+    def _layout_align(self):
+        """rebuild the buffer so the text sits centred or against the
+        right margin"""
+        text = "".join(self.align_chars)
+        gap = self._align_span() - len(text)
+        if self.align == "centre":
+            start = self.left_margin + gap // 2
+        else:
+            start = self.left_margin + gap
         self.buffer.clear()
         self.buffer.extend(" " * start + text)
         self.cursor = len(self.buffer)
@@ -302,7 +369,7 @@ def show_help(stdscr, machine):
     help_text = f"""alt + letter below:
 l = set left margin  r = set right margin       s = toggle line spacing
 a = set autoreturn   n = toggle margin release  q = quit
-c = centre text (enter to finish)
+c = centre text       j = right justify (enter to finish)
 file path:{machine.save_folder}
 """
     if (machine.help_wanted):
@@ -318,11 +385,14 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr(handy_row, 36, f"RM={machine.right_margin}", curses.color_pair(5))
     if machine.centre_mode:
         stdscr.addstr(handy_row, 44, "CENTRE", curses.color_pair(2))
+    elif machine.right_mode:
+        stdscr.addstr(handy_row, 44, "RIGHT", curses.color_pair(2))
     stdscr.addstr((handy_row +1), 0, f"File={machine.file_name}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 0, f"Printer Found={machine.printer_found}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 20, f"LC={machine.line_count}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 27, f"WC={machine.word_count}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 37, f"File={machine.use_file}", curses.color_pair(2))
+    stdscr.addstr((handy_row + 3), 0, f"Printer={machine.printer_name}", curses.color_pair(5))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
 def key_check(stdscr, key, machine):
@@ -347,6 +417,8 @@ def key_check(stdscr, key, machine):
                 machine.toggle_autoreturn()
             case 99: # alt+c toggle centre text
                 machine.centre_text()
+            case 106: # alt+j toggle right justify
+                machine.right_justify()
             case 104: # alt+h toggle help
                 machine.toggle_help()
             case 108: # alt+l set left margin
@@ -361,6 +433,7 @@ def key_check(stdscr, key, machine):
                 save_margins_to_config(machine.left_margin, machine.right_margin)
             case 115: # alt-s line spacing toggle
                 machine.toggle_line_space()
+                save_settings_to_config({"spacing_index": machine.spacing_index})
 
 def start_screen(stdscr):
     stdscr.addstr("Typewriter starting up, press any key to go", curses.color_pair(2))
@@ -413,8 +486,19 @@ def main(stdscr, machine):
         stdscr.refresh()
 
 
+def parse_args(args=None):
+    """command line options. anything given here overrides config.toml"""
+    ap = argparse.ArgumentParser(description="typewriter for a line printer")
+    ap.add_argument("use_file", nargs="?", choices=("True", "False"),
+                    help="save typed lines to a file (overrides use_file)")
+    ap.add_argument("-p", "--printer", choices=("epson", "zebra"),
+                    help="printer to use (overrides printer in config.toml)")
+    return ap.parse_args(args)
+
+
 def run():
     """load the config, build the machine and start the curses interface"""
+    args = parse_args()
     logging.basicConfig(filename='type.log', encoding='utf-8', level=logging.INFO)
     logging.debug("starting...")
     term_col, term_row = get_terminal_size()
@@ -426,6 +510,10 @@ def run():
     with open(CONFIG_PATH, mode="rb") as fp:
         config = tomllib.load(fp)
 
+    if args.printer:
+        config['printer'] = args.printer
+
+    use_printer = config.get('use_printer', True)
     machine = Typewriter(
         width=config['width'],
         autoreturn=config['autoreturn'],
@@ -434,17 +522,14 @@ def run():
         left_margin=config['left_margin'],
         right_margin=config.get('right_margin', config['width']),
         use_file=config.get('use_file', True),
-        use_printer=config.get('use_printer', True),
-        printer_vendor_id=config.get('printer_vendor_id'),
-        printer_product_id=config.get('printer_product_id'),
+        use_printer=use_printer,
+        printer=open_printer(config) if use_printer else None,
+        printer_name=printer_name(config) if use_printer else "off",
         bell=curses.beep)
 
     machine.save_folder = config['save_folder']
-    if (len(argv) == 2):
-        if (argv[1] == "True"):
-            machine.use_file = True
-        else:
-            machine.use_file = False
+    if args.use_file is not None:
+        machine.use_file = args.use_file == "True"
 
     # curses delays the esc key in case you are about to
     # use it for an esc sequence the line below calls
@@ -463,7 +548,6 @@ if __name__ == "__main__":
 #      set a tab stop at the cursor, clear all tabs but not margins
 # TODO line feed: move the carriage down without a carriage return
 # TODO underline text: underline everything including spaces, or words only
-# TODO right margin flush: type text flush against the right margin
 # TODO file handling to rename file
 # TODO command line startup options to set attributes without having
 #      to edit the script directly
