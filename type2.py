@@ -395,6 +395,11 @@ class Typewriter():
         self.cursor = len(self.buffer)
 
 
+    def toggle_printer(self):
+        """pause or resume sending lines to the printer. lines typed while
+        paused still go to the file but are never sent to the printer"""
+        self.use_printer = not self.use_printer
+
     def toggle_help(self):
         self.help_wanted = not self.help_wanted
 
@@ -406,7 +411,7 @@ def show_help(stdscr, machine):
     help_row = 11
     help_text = f"""arrows/home/end move along the line, del deletes.  alt + letter below:
 l = set left margin  r = set right margin       s = toggle line spacing
-a = set autoreturn   n = toggle margin release  q = quit
+a = set autoreturn   n = toggle margin release  q = quit  p = printer on/off
 c = centre text       j = right justify (enter to finish)
 file path:{machine.save_folder}
 """
@@ -431,6 +436,7 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr((handy_row + 2), 27, f"WC={machine.word_count}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 37, f"File={machine.use_file}", curses.color_pair(2))
     stdscr.addstr((handy_row + 3), 0, f"Printer={machine.printer_name}", curses.color_pair(5))
+    stdscr.addstr((handy_row + 3), 20, f"Printing={machine.use_printer}", curses.color_pair(2))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
 def key_check(stdscr, key, machine):
@@ -470,6 +476,8 @@ def key_check(stdscr, key, machine):
                 machine.toggle_autoreturn()
             case 99: # alt+c toggle centre text
                 machine.centre_text()
+            case 112: # alt+p pause / resume printing
+                machine.toggle_printer()
             case 106: # alt+j toggle right justify
                 machine.right_justify()
             case 104: # alt+h toggle help
@@ -576,8 +584,10 @@ def run():
         right_margin=config.get('right_margin', config['width']),
         use_file=config.get('use_file', True),
         use_printer=use_printer,
-        printer=open_printer(config) if use_printer else None,
-        printer_name=printer_name(config) if use_printer else "off",
+        # always open the printer so alt-p can turn printing on even if
+        # use_printer starts off false in the config
+        printer=open_printer(config),
+        printer_name=printer_name(config),
         bell=curses.beep)
 
     machine.save_folder = config['save_folder']

@@ -382,6 +382,22 @@ def test_toggling_centre_off_keeps_text(make):
     assert t.give_buffer() == centred + "!"
 
 
+def test_pausing_printer_keeps_lines_in_file_only(make, tmp_path):
+    printer = FakePrinter()
+    t = make(use_printer=True, printer=printer, use_file=True)
+    t.save_folder = str(tmp_path)
+    type_text(t, "one"); t.carriage_return()
+    t.toggle_printer()
+    assert not t.use_printer
+    type_text(t, "two"); t.carriage_return()
+    t.toggle_printer()
+    assert t.use_printer
+    type_text(t, "three"); t.carriage_return()
+    # paused line is never sent, not even after resuming
+    assert [line for line, _ in printer.lines] == ["one", "three"]
+    assert (tmp_path / t.file_name).read_text() == "one\ntwo\nthree\n"
+
+
 # ----------------------------
 # line editing
 # ----------------------------
