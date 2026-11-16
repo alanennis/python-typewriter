@@ -9,7 +9,8 @@ import pytest
 from zebra_lines import LEFT, line_zpl
 
 from type2 import (Typewriter, open_printer, parse_args, printer_name,
-                   save_margins_to_config, save_settings_to_config)
+                   save_margins_to_config, save_settings_to_config,
+                   sound_player)
 
 
 # ----------------------------
@@ -75,6 +76,155 @@ def test_tab_bar_shows_margins(make):
     assert bar[5] == "!"
     assert bar[60] == "!"
     assert bar.count("!") == 2
+
+
+def test_tab_bar_marks_hot_zone_start(make):
+    bar = make(left_margin=5, right_margin=60, margin_bell=8).give_tab_bar()
+    assert bar[52] == ":"
+    assert bar.count(":") == 1
+    assert set(bar) == {".", "!", ":"}
+
+
+def test_hot_zone_mark_follows_right_margin(make):
+    t = make(right_margin=60, margin_bell=8)
+    t.cursor = 70
+    t.margin_set_right()
+    bar = t.give_tab_bar()
+    assert bar[62] == ":" and bar[52] == "."
+
+
+def test_hot_zone_mark_is_where_the_bell_rings(make, bell):
+    t = make(right_margin=30, margin_bell=8)
+    col = t.give_tab_bar().index(":")
+    type_text(t, "x" * col)
+    assert bell.count == 0
+    t.char_add("x")                 # typing at the marked column
+    assert bell.count == 1
+
+
+def test_hot_zone_plays_ding_not_plain_bell(bell):
+    ding = Bell()
+    t = Typewriter(width=75, right_margin=30, margin_bell=8, use_file=False,
+                   use_printer=False, bell=bell, ding=ding)
+    type_text(t, "x" * 23)
+    assert ding.count == 1 and bell.count == 0
+    type_text(t, "x" * 7)                  # line full: error beep, no ding
+    t.char_add("x")
+    assert ding.count == 1 and bell.count == 1
+
+
+def test_bell_off_silences_ding_and_beeps(bell):
+    ding = Bell()
+    t = Typewriter(width=75, right_margin=30, margin_bell=8, use_file=False,
+                   use_printer=False, bell=bell, ding=ding)
+    t.toggle_bell()
+    assert not t.bell_on
+    type_text(t, "x" * 31)                 # through the hot zone to full
+    t.cursor_right()                        # at the end: would beep
+    assert ding.count == 0 and bell.count == 0
+    t.toggle_bell()
+    t.cursor_right()
+    assert bell.count == 1
+
+
+def test_bell_can_start_off(bell):
+    t = Typewriter(use_file=False, use_printer=False, bell=bell, bell_on=False)
+    t.cursor_left()
+    assert bell.count == 0
+
+
+def test_save_bell_setting_as_toml_bool(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("bell = true # comment\nwidth = 75\n")
+    save_settings_to_config({"bell": False}, cfg)
+    text = cfg.read_text()
+    assert "bell = false # comment" in text
+    assert tomllib.loads(text)["bell"] is False
+    save_settings_to_config({"bell": True}, cfg)
+    assert tomllib.loads(cfg.read_text())["bell"] is True
+
+
+def test_sound_player_falls_back_when_file_missing(tmp_path):
+    beep = Bell()
+    assert sound_player(str(tmp_path / "nope.wav"), beep) is beep
+    assert sound_player("", beep) is beep
+
+
+def test_sound_player_runs_player_in_background(tmp_path, monkeypatch):
+    sound = tmp_path / "ding.ogg"           # not a wav, so no streaming
+    sound.write_bytes(b"")
+    calls = []
+    monkeypatch.setattr("type2.shutil.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("type2.subprocess.Popen",
+                        lambda args, **kw: calls.append(args))
+    play = sound_player(str(sound), Bell())
+    play()
+    assert calls == [["paplay", str(sound)]]
+
+
+class FakePipe:
+    def __init__(self):
+        self.data = b""
+
+    def write(self, data):
+        self.data += data
+
+    def flush(self):
+        pass
+
+
+class FakePacat:
+    def __init__(self, args, **kw):
+        self.args = args
+        self.stdin = FakePipe()
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = -15
+
+
+def test_wav_is_streamed_through_one_pacat(monkeypatch):
+    started = []
+    def popen(args, **kw):
+        started.append(FakePacat(args, **kw))
+        return started[-1]
+    monkeypatch.setattr("type2.shutil.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("type2.subprocess.Popen", popen)
+    play = sound_player("ding.wav", Bell())
+    play()
+    started_after_first = len(started)
+    import time
+    for _ in range(50):                     # let the writer thread finish
+        if not started[0].stdin.data == b"":
+            break
+        time.sleep(0.01)
+    play()
+    assert started_after_first == 1 and len(started) == 1
+    assert started[0].args[0] == "pacat"
+    assert "--format=s16le" in started[0].args
+    assert len(started[0].stdin.data) > 0
+
+
+def test_dead_stream_falls_back_to_player(monkeypatch):
+    started = []
+    def popen(args, **kw):
+        started.append(FakePacat(args, **kw))
+        return started[-1]
+    monkeypatch.setattr("type2.shutil.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("type2.subprocess.Popen", popen)
+    play = sound_player("ding.wav", Bell())
+    started[0].returncode = 1               # pacat has gone away
+    play()
+    assert started[1].args[0] == "paplay"
+
+
+def test_margin_wins_if_hot_zone_starts_on_it(make):
+    bar = make(left_margin=10, right_margin=18, margin_bell=8).give_tab_bar()
+    assert bar[10] == "!"
+    assert ":" not in bar
 
 
 def test_tab_bar_right_marker_at_full_width(make):
@@ -371,15 +521,16 @@ def test_carriage_return_ends_centre_mode(make):
     assert t.give_buffer() == " " * 10
 
 
-def test_toggling_centre_off_keeps_text(make):
-    t = make(left_margin=0, right_margin=60)
+def test_toggling_centre_off_returns_text_to_left_margin(make):
+    t = make(left_margin=4, right_margin=60)
     t.centre_text()
     type_text(t, "Hi")
-    centred = t.give_buffer()
     t.centre_text()
     assert not t.centre_mode
+    assert t.give_buffer() == "    Hi"
+    assert t.cursor == 6
     t.char_add("!")
-    assert t.give_buffer() == centred + "!"
+    assert t.give_buffer() == "    Hi!"
 
 
 def test_pausing_printer_keeps_lines_in_file_only(make, tmp_path):
@@ -485,6 +636,52 @@ def test_edited_line_is_what_gets_printed(make):
     assert printer.lines[0][0] == "the cat"
 
 
+def test_delete_word_at_end(make):
+    t = make()
+    type_text(t, "hello big world")
+    t.delete_word()
+    assert t.give_buffer() == "hello big "
+    t.delete_word()                 # skips the space, then deletes "big"
+    assert t.give_buffer() == "hello "
+    assert t.cursor == 6
+
+
+def test_delete_word_mid_line(make):
+    t = make()
+    type_text(t, "one two three")
+    for _ in range(6):
+        t.cursor_left()             # cursor just after "two"
+    t.delete_word()
+    assert t.give_buffer() == "one  three"
+    assert t.cursor == 4
+
+
+def test_delete_word_stops_at_left_margin(make):
+    t = make(left_margin=5)
+    type_text(t, "hello")
+    t.delete_word()
+    assert t.give_buffer() == " " * 5
+    assert t.cursor == 5
+    t.delete_word()                 # at the margin: clears to line start
+    assert t.give_buffer() == ""
+    assert t.cursor == 0
+
+
+def test_delete_word_on_empty_line_does_nothing(make):
+    t = make()
+    t.delete_word()
+    assert t.give_buffer() == "" and t.cursor == 0
+
+
+def test_delete_word_in_right_justify(make):
+    t = make(right_margin=20)
+    t.right_justify()
+    type_text(t, "ab cd")
+    t.delete_word()
+    assert t.give_buffer() == " " * 17 + "ab "
+    assert t.right_mode
+
+
 def test_arrows_ignored_in_align_mode(make, bell):
     t = make(right_margin=20)
     t.right_justify()
@@ -551,18 +748,25 @@ def test_switch_from_centre_to_right(make):
     assert t.give_buffer() == " " * 18 + "ab"
 
 
-def test_toggling_right_off_keeps_text(make, bell):
-    t = make(right_margin=20)
+def test_toggling_right_off_returns_text_to_left_margin(make):
+    t = make(left_margin=2, right_margin=20)
     t.right_justify()
     type_text(t, "ab")
     t.right_justify()
     assert not t.right_mode
-    assert t.give_buffer() == " " * 18 + "ab"
-    # already at the right margin, so normal typing just dings
-    bell.count = 0
+    assert t.give_buffer() == "  ab"
     t.char_add("!")
-    assert t.give_buffer() == " " * 18 + "ab"
-    assert bell.count >= 1
+    assert t.give_buffer() == "  ab!"
+
+
+def test_toggling_off_after_switching_modes_returns_left(make):
+    t = make(right_margin=20)
+    t.centre_text()
+    type_text(t, "ab")
+    t.right_justify()
+    t.right_justify()
+    assert t.align is None
+    assert t.give_buffer() == "ab"
 
 
 

@@ -1,7 +1,9 @@
 width = 75
 autoreturn = true
 spacing_index = 0 # 1.5 line spacingi, 0 for single line, 2 for double line
-margin_bell = 8 # numbers of spaces from left margin to bell
+margin_bell = 9 # numbers of spaces from left margin to bell
+bell = true # false switches off the margin bell and error beeps (alt-b toggles it)
+bell_sound = "ding2.wav" # sound played at the margin bell, any wav/ogg file; "" for the terminal beep
 right_margin = 62 # set the distance to the right margin
 left_margin = 0
 use_file = true

@@ -8,16 +8,24 @@ import logging
 import re
 from pathlib import Path
 import argparse
+import atexit
+import shutil
+import subprocess
+import threading
+import wave
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 
 def save_settings_to_config(settings, config_path=CONFIG_PATH):
-    """write whole number settings (a dict of key: value) back to the
-    config file, leaving the rest of the file (including comments) untouched"""
+    """write whole number or true/false settings (a dict of key: value)
+    back to the config file, leaving the rest of the file (including
+    comments) untouched"""
     text = config_path.read_text()
     for key, value in settings.items():
-        pattern = rf"^({key}\s*=\s*)\d+"
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+        pattern = rf"^({key}\s*=\s*)(?:\d+|true|false)"
         if re.search(pattern, text, flags=re.MULTILINE):
             text = re.sub(pattern, rf"\g<1>{value}", text, count=1, flags=re.MULTILINE)
         else:
@@ -77,6 +85,102 @@ def open_printer(config):
     raise SystemExit(f'unknown printer "{kind}" in config, use "epson" or "zebra"')
 
 
+SOUND_PLAYERS = ("paplay", "pw-play", "aplay")
+# pacat sample format names for each wav sample width in bytes
+PACAT_FORMATS = {1: "u8", 2: "s16le", 3: "s24le", 4: "s32le"}
+
+
+class StreamingSound():
+    """plays a wav file with almost no delay.
+
+    starting a player program for every ding takes around a tenth of a
+    second, and the sound card goes to sleep when nothing is playing,
+    which adds more. instead one pacat is started up front with an open
+    stream, and each ding just writes the sound into it."""
+
+    def __init__(self, path):
+        with wave.open(str(path), "rb") as w:
+            fmt = PACAT_FORMATS[w.getsampwidth()]
+            rate, channels = w.getframerate(), w.getnchannels()
+            self.frames = w.readframes(w.getnframes())
+        self.proc = subprocess.Popen(
+            ["pacat", "--playback", "--raw", f"--format={fmt}",
+             f"--rate={rate}", f"--channels={channels}", "--latency-msec=20",
+             "--client-name=typewriter", "--stream-name=margin bell"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        self.playing = threading.Event()
+        self.alive = True
+        atexit.register(self.close)
+
+    def _write(self):
+        # runs in a thread because the write only finishes as the sound
+        # plays, and typing mustn't wait for that
+        try:
+            self.proc.stdin.write(self.frames)
+            self.proc.stdin.flush()
+        except (OSError, ValueError):
+            self.alive = False
+        finally:
+            self.playing.clear()
+
+    def play(self):
+        """start the sound; returns False if the player has died"""
+        if not self.alive or self.proc.poll() is not None:
+            self.alive = False
+            return False
+        if not self.playing.is_set():       # still ringing: don't stack up
+            self.playing.set()
+            threading.Thread(target=self._write, daemon=True).start()
+        return True
+
+    def close(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+
+
+def sound_player(sound_file, fallback):
+    """return a function that plays sound_file in the background without
+    waiting for it to finish. a relative path is taken from the folder
+    this script is in. wav files are streamed through pacat for the
+    quickest response; other files start a player each time. if the file
+    or a player program can't be found the fallback (the terminal beep)
+    is returned instead"""
+    if not sound_file:
+        return fallback
+    path = Path(sound_file).expanduser()
+    if not path.is_absolute():
+        path = CONFIG_PATH.parent / path
+    if not path.is_file():
+        logging.warning(f"can't find {path}, using terminal beep")
+        return fallback
+
+    stream = None
+    if path.suffix.lower() == ".wav" and shutil.which("pacat"):
+        try:
+            stream = StreamingSound(path)
+        except (OSError, wave.Error, KeyError, EOFError) as e:
+            logging.warning(f"can't stream {path} ({e}), starting a player each time")
+
+    player = next((p for p in SOUND_PLAYERS if shutil.which(p)), None)
+    if stream is None and player is None:
+        logging.warning(f"no sound player found, using terminal beep")
+        return fallback
+
+    def play():
+        if stream is not None and stream.play():
+            return
+        if player is None:
+            fallback()
+            return
+        try:
+            subprocess.Popen([player, str(path)], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            fallback()
+    return play
+
+
 def set_shorter_esc_delay_in_os(delay_ms):
     environ.setdefault('ESCDELAY', delay_ms)
 
@@ -85,11 +189,18 @@ class Typewriter():
                 autoreturn=False, margin_bell=8,
                 left_margin = 0, right_margin = None,
                 use_file = True, use_printer = True,
-                printer = None, printer_name = "none", bell = None):
-        # bell is called whenever the machine wants to ding. the class knows
-        # nothing about the screen, so the caller decides what a ding is
-        # (curses.beep in the real program, a no-op by default)
-        self.bell = bell if bell is not None else (lambda: None)
+                printer = None, printer_name = "none", bell = None,
+                ding = None, bell_on = True):
+        # bell is called whenever the machine wants to beep (line full,
+        # cursor at the end of the line...). the class knows nothing about
+        # the screen, so the caller decides what a beep is (curses.beep in
+        # the real program, a no-op by default)
+        self._bell_sound = bell if bell is not None else (lambda: None)
+        # ding is the margin bell when you reach the hot zone, like the
+        # bell on a real typewriter. it uses the plain bell unless given
+        self._ding_sound = ding if ding is not None else self._bell_sound
+        # bell_on False silences both
+        self.bell_on = bell_on
         self.width = width
         self.autoreturn = autoreturn
         self.spacing_choices = (1, 1.5, 2)
@@ -101,11 +212,7 @@ class Typewriter():
             right_margin = width
         self.right_margin = min(right_margin, width)
         self.left_margin = left_margin
-        self.tab_bar = []
-        self.tab_bar.extend('.' * self.width)
         self.margin_release = False
-        self.tab_bar[self.left_margin] = "!"
-        self.tab_bar[self._right_marker_index()] = "!"
         self.prev_buf_1 = ''
         self.prev_buf_2 = ''
         self.prev_buf_3 = ''
@@ -161,9 +268,34 @@ class Typewriter():
     def give_prev_buff_3(self):
         return self.prev_buf_3
 
+    def bell(self):
+        """beep for an error, unless the bell is switched off"""
+        if self.bell_on:
+            self._bell_sound()
+
+    def ding(self):
+        """ring the margin bell, unless the bell is switched off"""
+        if self.bell_on:
+            self._ding_sound()
+
+    def toggle_bell(self):
+        """switch all bell sounds off or on"""
+        self.bell_on = not self.bell_on
+
+    def hot_zone_start(self):
+        """column where the margin bell rings and the hot zone begins"""
+        return self.right_margin - self.margin_bell
+
     def give_tab_bar(self):
-        """ return the current contents of tab bar as string"""
-        return ("".join(self.tab_bar))
+        """ the margin line: '!' at each margin, ':' where the hot zone
+        starts and '.' everywhere else"""
+        bar = ["."] * self.width
+        hot = self.hot_zone_start()
+        if 0 <= hot < self.width:
+            bar[hot] = ":"
+        bar[self.left_margin] = "!"
+        bar[self._right_marker_index()] = "!"
+        return "".join(bar)
 
     def toggle_line_space(self):
         self.spacing_index += 1
@@ -184,9 +316,9 @@ class Typewriter():
             return
         # if the buffer is at the margin bell point then
         # make the bell ring and set the hot zone flag
-        if (len(self.buffer) == (self.right_margin - self.margin_bell)):
-            self.bell()
-        self.margin_hot_zone = len(self.buffer) >= (self.right_margin - self.margin_bell)
+        if (len(self.buffer) == self.hot_zone_start()):
+            self.ding()
+        self.margin_hot_zone = len(self.buffer) >= self.hot_zone_start()
 
         # if the buffer is less than the right margin but not longer
         # than the printable width then add character to the buffer
@@ -223,6 +355,31 @@ class Typewriter():
             logging.debug(f'position is {self.cursor}')
             self.buffer.pop(self.cursor - 1)
             self.cursor -= 1
+
+    @staticmethod
+    def _word_start(chars, end, floor=0):
+        """index where the word before position end starts, skipping any
+        spaces between it and end first. never goes below floor"""
+        i = end
+        while i > floor and chars[i - 1] == " ":
+            i -= 1
+        while i > floor and chars[i - 1] != " ":
+            i -= 1
+        return i
+
+    def delete_word(self):
+        """delete back to the start of the word before the cursor. stops at
+        the left margin, unless the cursor is already at or left of it"""
+        if self.align:
+            start = self._word_start(self.align_chars, len(self.align_chars))
+            del self.align_chars[start:]
+            self._layout_align()
+            return
+
+        floor = self.left_margin if self.cursor > self.left_margin else 0
+        start = self._word_start(self.buffer, self.cursor, floor)
+        del self.buffer[start:self.cursor]
+        self.cursor = start
 
     def delete(self):
         """delete the character under the cursor"""
@@ -315,9 +472,7 @@ class Typewriter():
         if new_left >= self.right_margin:
             self.bell()
             return
-        self.tab_bar[self.left_margin] = "."
         self.left_margin = new_left
-        self.tab_bar[self.left_margin] = "!"
 
     def margin_set_right(self):
         """ set the current cursor position as the right margin
@@ -326,9 +481,7 @@ class Typewriter():
         if new_right <= self.left_margin or new_right > self.width:
             self.bell()
             return
-        self.tab_bar[self._right_marker_index()] = "."
         self.right_margin = new_right
-        self.tab_bar[self._right_marker_index()] = "!"
 
     def toggle_margin_release(self):
         """ allow the cursor to move further than the margins"""
@@ -355,13 +508,18 @@ class Typewriter():
 
         any text already typed on the line is picked up and aligned. while
         the mode is on every character typed re-aligns the line. turning it
-        off leaves the text where it is so you can carry on typing normally.
-        a carriage return also ends it. switching straight from one mode to
-        the other re-aligns the text.
+        off moves the text back to the left margin so you can carry on
+        typing normally. a carriage return also ends it, leaving the line
+        aligned. switching straight from one mode to the other re-aligns
+        the text.
         """
         if self.align == mode:
+            text = "".join(self.align_chars)
             self.align = None
             self.align_chars = []
+            self.buffer.clear()
+            self.buffer.extend(" " * self.left_margin + text)
+            self.cursor = len(self.buffer)
             return
 
         if self.align is None:
@@ -409,10 +567,10 @@ class Typewriter():
 
 def show_help(stdscr, machine):
     help_row = 11
-    help_text = f"""arrows/home/end move along the line, del deletes.  alt + letter below:
+    help_text = f"""arrows/home/end move, del deletes, alt+backspace deletes a word. alt+ below:
 l = set left margin  r = set right margin       s = toggle line spacing
 a = set autoreturn   n = toggle margin release  q = quit  p = printer on/off
-c = centre text       j = right justify (enter to finish)
+c = centre text      j = right justify (enter to finish)  b = bell on/off
 file path:{machine.save_folder}
 """
     if (machine.help_wanted):
@@ -437,6 +595,7 @@ def show_handy_settings(stdscr, machine):
     stdscr.addstr((handy_row + 2), 37, f"File={machine.use_file}", curses.color_pair(2))
     stdscr.addstr((handy_row + 3), 0, f"Printer={machine.printer_name}", curses.color_pair(5))
     stdscr.addstr((handy_row + 3), 20, f"Printing={machine.use_printer}", curses.color_pair(2))
+    stdscr.addstr((handy_row + 3), 37, f"Bell={machine.bell_on}", curses.color_pair(2))
     stdscr.addstr((handy_row + 4), 0, "alt-h for help", curses.color_pair(5))
 
 def key_check(stdscr, key, machine):
@@ -476,6 +635,11 @@ def key_check(stdscr, key, machine):
                 machine.toggle_autoreturn()
             case 99: # alt+c toggle centre text
                 machine.centre_text()
+            case 127 | 8 | curses.KEY_BACKSPACE: # alt+backspace delete word
+                machine.delete_word()
+            case 98: # alt+b bell on / off
+                machine.toggle_bell()
+                save_settings_to_config({"bell": machine.bell_on})
             case 112: # alt+p pause / resume printing
                 machine.toggle_printer()
             case 106: # alt+j toggle right justify
@@ -588,7 +752,9 @@ def run():
         # use_printer starts off false in the config
         printer=open_printer(config),
         printer_name=printer_name(config),
-        bell=curses.beep)
+        bell=curses.beep,
+        ding=sound_player(config.get('bell_sound', 'ding.wav'), curses.beep),
+        bell_on=config.get('bell', True))
 
     machine.save_folder = config['save_folder']
     if args.use_file is not None:
