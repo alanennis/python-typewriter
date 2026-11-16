@@ -680,13 +680,21 @@ def show_buffers(stdscr, machine):
     # put the screen cursor where the machine says the next character goes
     stdscr.move(3, machine.cursor)
 
+# terminal colour number for highlighted settings (0-255). 109 is a soft
+# grey-teal; try 144 (khaki), 146 (lavender grey) or 248 (light grey)
+HIGHLIGHT_COLOUR = 109
+
+
 def setup_curses(stdscr):
     curses.start_color()
     curses.use_default_colors()
     curses.curs_set(1)
     curses.noecho()
     curses.init_pair(1, curses.COLOR_GREEN, -1)
-    curses.init_pair(2, curses.COLOR_RED, -1)
+    # pair 2 marks settings and modes (File=, Printing=, Bell=, CENTRE...).
+    # a soft colour so it's noticeable without being distracting
+    highlight = HIGHLIGHT_COLOUR if curses.COLORS >= 256 else curses.COLOR_CYAN
+    curses.init_pair(2, highlight, -1)
     curses.init_pair(3, curses.COLOR_WHITE, -1)
     curses.init_pair(4, curses.COLOR_CYAN, -1)
     curses.init_pair(5, 241, -1)
