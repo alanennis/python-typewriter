@@ -1,2 +1,4 @@
 # runtime dependencies (curses and tomllib are part of the standard library)
 python-escpos==3.1
+pillow==13.0.0   # drawing zebra lines in a font file (zebra_font)
+pyusb==1.3.1     # zebra fallback when /dev/usb/lp* isn't available

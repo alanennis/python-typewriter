@@ -6,7 +6,7 @@ import tomllib
 
 import pytest
 
-from zebra_lines import LEFT, line_zpl
+from zebra_lines import LEFT, ZebraLinePrinter, line_zpl
 
 from type2 import (Typewriter, open_printer, parse_args, printer_name,
                    save_margins_to_config, save_settings_to_config,
@@ -943,3 +943,15 @@ def test_blank_carriage_return_sends_blank_line_to_printer(make):
 def test_zebra_right_justify_clamped_to_paper():
     zpl = line_zpl(" " * 90 + "end", align="right", char_dots=12)
     assert "^FB772,1,0,R" in zpl
+
+
+def test_zebra_close_restores_saved_printer_settings(tmp_path):
+    dev = tmp_path / "lp0"              # stands in for /dev/usb/lp0
+    p = ZebraLinePrinter(str(dev), continuous=True)
+    p.print_line("hello")
+    p.close()
+    p.close()                           # second close does nothing
+    sent = dev.read_bytes()
+    assert sent.startswith(b"^XA^PW")       # setup first
+    assert sent.count(b"^JUR") == 1
+    assert sent.rstrip().endswith(b"^XA^JUR^XZ")

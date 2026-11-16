@@ -78,7 +78,9 @@ def open_printer(config):
                 continuous=config.get('zebra_continuous', False),
                 upright=config.get('zebra_upright', False),
                 darkness=config.get('zebra_darkness'),
-                char_dots=config.get('zebra_char_dots'))
+                char_dots=config.get('zebra_char_dots'),
+                font_file=config.get('zebra_font') or None,
+                font_size=config.get('zebra_font_size'))
     except Exception as e:
         logging.warning(f"could not open {kind} printer: {e}")
         return None
