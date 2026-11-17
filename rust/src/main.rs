@@ -44,6 +44,43 @@ struct Args {
     /// created on the first run)
     #[arg(short, long)]
     config: Option<PathBuf>,
+    /// file to write to instead of a dated one. a plain name goes in
+    /// save_folder; a path (./test.txt, ~/notes.txt) is taken from the
+    /// current folder. lines are added to the end if it already exists.
+    /// turns on saving to a file
+    #[arg(short, long, value_name = "NAME")]
+    file: Option<String>,
+}
+
+/// where --file NAME writes. a plain name goes in save_folder (it's
+/// returned as it is, to be joined on later); a path with a folder in it,
+/// like ./test.txt, is taken from the current folder, so it's made into a
+/// full path now
+fn file_arg_path(name: &str) -> String {
+    if name.contains('/') {
+        if let Ok(p) = std::path::absolute(name) {
+            return p.display().to_string();
+        }
+    }
+    name.to_string()
+}
+
+impl Args {
+    /// parse and check the options go together
+    fn parse_checked<I, T>(args: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let a = Args::try_parse_from(args)?;
+        if a.file.is_some() && a.use_file == Some(YesNo::False) {
+            return Err(<Args as clap::CommandFactory>::command().error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--file and False don't go together: False turns off the file",
+            ));
+        }
+        Ok(a)
+    }
 }
 
 fn beep() {
@@ -60,7 +97,36 @@ fn put(out: &mut impl Write, row: u16, col: u16, text: &str, color: Color) -> io
     queue!(out, cursor::MoveTo(col, row), SetForegroundColor(color), Print(text), ResetColor)
 }
 
-fn show_handy_settings(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
+/// a path cut down to fit in width columns for the info panel: the home
+/// folder becomes ~, then if it's still too long the start is replaced
+/// with ... (at a folder boundary where possible) so the file name shows
+fn short_path(text: &str, width: usize, home: Option<&str>) -> String {
+    let mut text = text.to_string();
+    if let Some(home) = home.filter(|h| !h.is_empty()) {
+        if text == home || text.starts_with(&format!("{home}/")) {
+            text = format!("~{}", &text[home.len()..]);
+        }
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text;
+    }
+    if width <= 3 {
+        return chars[chars.len() - width..].iter().collect();
+    }
+    let mut tail: String = chars[chars.len() - (width - 3)..].iter().collect();
+    if let Some(slash) = tail.find('/').filter(|&i| i > 0) {
+        tail = tail[slash..].to_string();
+    }
+    format!("...{tail}")
+}
+
+/// short_path with the real home folder
+fn short_home_path(text: &str, width: usize) -> String {
+    short_path(text, width, std::env::var("HOME").ok().as_deref())
+}
+
+fn show_handy_settings(out: &mut impl Write, m: &Typewriter, cols: usize) -> io::Result<()> {
     let r = 6;
     put(out, r, 0, &format!("Width={}", m.width), DIM)?;
     put(out, r, 10, &format!("LS={}", m.current_spacing), DIM)?;
@@ -72,7 +138,8 @@ fn show_handy_settings(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
     } else if m.right_mode() {
         put(out, r, 44, "RIGHT", HIGHLIGHT)?;
     }
-    put(out, r + 1, 0, &format!("File={}", m.file_name), DIM)?;
+    let file_name = short_home_path(&m.file_name, cols.saturating_sub("File=".len()));
+    put(out, r + 1, 0, &format!("File={file_name}"), DIM)?;
     put(out, r + 2, 0, &format!("Printer Found={}", py_bool(m.printer_found)), DIM)?;
     put(out, r + 2, 20, &format!("LC={}", m.line_count), DIM)?;
     put(out, r + 2, 27, &format!("WC={}", m.word_count), DIM)?;
@@ -83,13 +150,14 @@ fn show_handy_settings(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
     put(out, r + 4, 0, "alt-h for help", DIM)
 }
 
-fn show_help(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
+fn show_help(out: &mut impl Write, m: &Typewriter, cols: usize) -> io::Result<()> {
+    let folder = short_home_path(&m.save_folder, cols.saturating_sub("file path:".len()));
     let lines = [
         "arrows/home/end move, del deletes, alt+backspace deletes a word. alt+ below:".to_string(),
         "l = set left margin  r = set right margin       s = toggle line spacing".into(),
         "a = set autoreturn   n = toggle margin release  q = quit  p = printer on/off".into(),
         "c = centre text      j = right justify (enter to finish)  b = bell on/off".into(),
-        format!("file path:{}", m.save_folder),
+        format!("file path:{folder}"),
     ];
     for (i, line) in lines.iter().enumerate() {
         put(out, 11 + i as u16, 0, line, DIM)?;
@@ -108,10 +176,12 @@ fn show_buffers(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
 }
 
 fn draw(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
+    // columns that can be written without wrapping onto the next line
+    let cols = terminal::size().map_or(80, |(c, _)| c as usize).saturating_sub(1);
     queue!(out, BeginSynchronizedUpdate, Clear(ClearType::All))?;
-    show_handy_settings(out, m)?;
+    show_handy_settings(out, m, cols)?;
     if m.help_wanted {
-        show_help(out, m)?;
+        show_help(out, m, cols)?;
     }
     show_buffers(out, m)?;
     queue!(out, EndSynchronizedUpdate)?;
@@ -222,7 +292,7 @@ fn main_loop(m: &mut Typewriter, config_path: &Path) -> Result<(), String> {
 
 /// load the config, build the machine and start the screen
 fn run() -> Result<(), String> {
-    let args = Args::parse();
+    let args = Args::parse_checked(std::env::args_os()).unwrap_or_else(|e| e.exit());
     let (cols, rows) = terminal::size().map_err(|e| format!("can't read terminal size: {e}"))?;
     if rows < 16 || cols < 81 {
         println!("terminal is too small please make it at least 16 lines by 81 columns");
@@ -279,6 +349,10 @@ fn run() -> Result<(), String> {
 
     let mut machine = Typewriter::new(opts, printer, Some(Box::new(beep)), ding);
     machine.save_folder = cfg.require_str("save_folder")?.to_string();
+    if let Some(file) = args.file {
+        machine.file_name = file_arg_path(&file);
+        machine.use_file = true;
+    }
 
     main_loop(&mut machine, &config_path)
 }
@@ -312,5 +386,59 @@ mod tests {
         let a = Args::try_parse_from(["typewriter", "False", "-p", "zebra"]).unwrap();
         assert_eq!(a.use_file, Some(YesNo::False));
         assert_eq!(Args::try_parse_from(["typewriter"]).unwrap().use_file, None);
+    }
+
+    #[test]
+    fn file_option_on_command_line() {
+        let f = |a: &[&str]| Args::parse_checked([&["typewriter"], a].concat()).unwrap().file;
+        assert_eq!(f(&["--file", "notes.txt"]).as_deref(), Some("notes.txt"));
+        assert_eq!(f(&["-f", "/tmp/x.txt", "True"]).as_deref(), Some("/tmp/x.txt"));
+        assert_eq!(f(&[]), None); // dated name as before
+    }
+
+    #[test]
+    fn file_path_with_folder_is_from_current_folder() {
+        let cwd = std::env::current_dir().unwrap();
+        // std::path::absolute keeps the "." in, which the os ignores
+        assert_eq!(Path::new(&file_arg_path("./test.txt")), cwd.join("./test.txt"));
+        assert_eq!(Path::new(&file_arg_path("sub/test.txt")), cwd.join("sub/test.txt"));
+        assert_eq!(file_arg_path("/abs/test.txt"), "/abs/test.txt");
+        assert_eq!(file_arg_path("test.txt"), "test.txt"); // left for save_folder
+    }
+
+    #[test]
+    fn short_path_leaves_short_paths_alone() {
+        assert_eq!(short_path("2026-11-17-202444.txt", 70, None), "2026-11-17-202444.txt");
+        assert_eq!(short_path("/tmp/a.txt", 70, Some("/home/me")), "/tmp/a.txt");
+    }
+
+    #[test]
+    fn short_path_uses_tilde_for_home() {
+        let home = Some("/home/someone");
+        assert_eq!(short_path("/home/someone/writing/a.txt", 70, home), "~/writing/a.txt");
+        assert_eq!(short_path("/home/someoneelse/a.txt", 70, home), "/home/someoneelse/a.txt");
+    }
+
+    #[test]
+    fn short_path_cuts_at_folder_and_keeps_file_name() {
+        let folders: Vec<String> = (0..20).map(|i| format!("folder{i}")).collect();
+        let deep = format!("/data/{}/chapter-12.txt", folders.join("/"));
+        let short = short_path(&deep, 40, None);
+        assert!(short.len() <= 40);
+        assert!(short.starts_with(".../") && short.ends_with("/folder19/chapter-12.txt"), "{short}");
+    }
+
+    #[test]
+    fn short_path_huge_file_name_still_fits() {
+        let short = short_path(&format!("/x/{}.txt", "a".repeat(100)), 30, None);
+        assert!(short.len() == 30 && short.starts_with("...") && short.ends_with("a.txt"));
+        assert_eq!(short_path("abcdef", 2, None), "ef");
+        assert_eq!(short_path("abcdef", 0, None), "");
+        assert_eq!(short_path("/é/ü/ñandú.txt", 10, None).chars().count(), 10); // not bytes
+    }
+
+    #[test]
+    fn file_option_clashes_with_false() {
+        assert!(Args::parse_checked(["typewriter", "False", "-f", "notes.txt"]).is_err());
     }
 }

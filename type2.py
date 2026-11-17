@@ -567,14 +567,39 @@ class Typewriter():
 # start of non class functions
 # ----------------------------
 
+def short_path(text, width):
+    """a path cut down to fit in width columns for the info panel: the home
+    folder becomes ~, then if it's still too long the start is replaced
+    with ... (at a folder boundary where possible) so the file name shows"""
+    home = path.expanduser("~")
+    if text == home or text.startswith(home + "/"):
+        text = "~" + text[len(home):]
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[-width:] if width > 0 else ""
+    tail = text[-(width - 3):]
+    slash = tail.find("/")
+    if slash > 0:
+        tail = tail[slash:]
+    return "..." + tail
+
+
+def screen_width(stdscr):
+    """columns that can be written without wrapping onto the next line"""
+    return stdscr.getmaxyx()[1] - 1
+
+
 def show_help(stdscr, machine):
     help_row = 11
+    folder = short_path(machine.save_folder, screen_width(stdscr) - len("file path:"))
     help_text = f"""arrows/home/end move, del deletes, alt+backspace deletes a word. alt+ below:
 l = set left margin  r = set right margin       s = toggle line spacing
 a = set autoreturn   n = toggle margin release  q = quit  p = printer on/off
 c = centre text      j = right justify (enter to finish)  b = bell on/off
-file path:{machine.save_folder}
-"""
+file path:{folder}"""
+    # no newline at the end: on a 16 line terminal this is the bottom row,
+    # and curses gives an error if the cursor goes off the screen
     if (machine.help_wanted):
         stdscr.addstr(help_row, 0, help_text, curses.color_pair(5))
 
@@ -590,7 +615,8 @@ def show_handy_settings(stdscr, machine):
         stdscr.addstr(handy_row, 44, "CENTRE", curses.color_pair(2))
     elif machine.right_mode:
         stdscr.addstr(handy_row, 44, "RIGHT", curses.color_pair(2))
-    stdscr.addstr((handy_row +1), 0, f"File={machine.file_name}", curses.color_pair(5))
+    file_name = short_path(machine.file_name, screen_width(stdscr) - len("File="))
+    stdscr.addstr((handy_row +1), 0, f"File={file_name}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 0, f"Printer Found={machine.printer_found}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 20, f"LC={machine.line_count}", curses.color_pair(5))
     stdscr.addstr((handy_row + 2), 27, f"WC={machine.word_count}", curses.color_pair(5))
@@ -721,6 +747,16 @@ def main(stdscr, machine):
         stdscr.refresh()
 
 
+def file_arg_path(name):
+    """where --file NAME writes. a plain name goes in save_folder (it's
+    returned as it is, to be joined on later); a path with a folder in it,
+    like ./test.txt, is taken from the current folder, so it's made into a
+    full path now"""
+    if "/" in name:
+        return path.abspath(name)
+    return name
+
+
 def parse_args(args=None):
     """command line options. anything given here overrides config.toml"""
     ap = argparse.ArgumentParser(description="typewriter for a line printer")
@@ -728,7 +764,15 @@ def parse_args(args=None):
                     help="save typed lines to a file (overrides use_file)")
     ap.add_argument("-p", "--printer", choices=("epson", "zebra"),
                     help="printer to use (overrides printer in config.toml)")
-    return ap.parse_args(args)
+    ap.add_argument("-f", "--file", metavar="NAME",
+                    help="file to write to instead of a dated one. a plain name "
+                    "goes in save_folder; a path (./test.txt, ~/notes.txt) is "
+                    "taken from the current folder. lines are added to the end "
+                    "if it already exists. turns on saving to a file")
+    parsed = ap.parse_args(args)
+    if parsed.file is not None and parsed.use_file == "False":
+        ap.error("--file and False don't go together: False turns off the file")
+    return parsed
 
 
 def run():
@@ -769,6 +813,9 @@ def run():
     machine.save_folder = config['save_folder']
     if args.use_file is not None:
         machine.use_file = args.use_file == "True"
+    if args.file is not None:
+        machine.file_name = file_arg_path(args.file)
+        machine.use_file = True
 
     # curses delays the esc key in case you are about to
     # use it for an esc sequence the line below calls

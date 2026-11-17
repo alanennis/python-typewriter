@@ -19,6 +19,8 @@ python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 venv/bin/python type2.py
 venv/bin/python type2.py --printer zebra   # or -p epson, overrides config
+venv/bin/python type2.py -f letter.txt     # write to letter.txt in save_folder
+venv/bin/python type2.py -f ./notes.txt    # a path is from the current folder; added to if it exists
 ```
 
 settings live in `config.toml`. left and right margins are saved

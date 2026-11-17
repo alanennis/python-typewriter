@@ -880,6 +880,30 @@ mod tests {
     }
 
     #[test]
+    fn plain_file_name_goes_in_save_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = quiet(Options { use_file: true, ..opts() });
+        t.save_folder = dir.path().display().to_string();
+        t.file_name = "notes.txt".into();
+        std::fs::write(dir.path().join("notes.txt"), "already here\n").unwrap();
+        type_text(&mut t, "more");
+        t.carriage_return().unwrap();
+        let text = std::fs::read_to_string(dir.path().join("notes.txt")).unwrap();
+        assert_eq!(text, "already here\nmore\n");
+    }
+
+    #[test]
+    fn full_file_path_ignores_save_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = quiet(Options { use_file: true, ..opts() });
+        t.save_folder = dir.path().join("elsewhere").display().to_string();
+        t.file_name = dir.path().join("chosen.txt").display().to_string();
+        type_text(&mut t, "hi");
+        t.carriage_return().unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("chosen.txt")).unwrap(), "hi\n");
+    }
+
+    #[test]
     fn unwritable_save_folder_gives_message() {
         let mut t = quiet(Options { use_file: true, ..opts() });
         t.save_folder = "/nonexistent/folder".into();

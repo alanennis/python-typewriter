@@ -12,6 +12,8 @@ cargo build --release
 target/release/typewriter                 # uses config.toml next to the binary
 target/release/typewriter -p zebra        # or -p epson, overrides config
 target/release/typewriter False           # don't save to a file
+target/release/typewriter -f letter.txt   # write to letter.txt in save_folder
+target/release/typewriter -f ./notes.txt  # a path is from the current folder; added to if it exists
 target/release/typewriter --config ~/my.toml
 ```
 

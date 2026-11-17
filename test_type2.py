@@ -8,7 +8,8 @@ import pytest
 
 from zebra_lines import LEFT, ZebraLinePrinter, line_zpl
 
-from type2 import (Typewriter, open_printer, parse_args, printer_name,
+from type2 import (Typewriter, file_arg_path, open_printer, parse_args,
+                   printer_name, short_path,
                    save_margins_to_config, save_settings_to_config,
                    sound_player)
 
@@ -838,6 +839,54 @@ def test_use_file_argument_still_works():
     assert parse_args([]).use_file is None
 
 
+def test_file_option_on_command_line():
+    assert parse_args(["--file", "notes.txt"]).file == "notes.txt"
+    assert parse_args(["-f", "/tmp/x.txt", "True"]).file == "/tmp/x.txt"
+    assert parse_args([]).file is None      # dated name as before
+
+
+def test_file_option_clashes_with_false():
+    with pytest.raises(SystemExit):
+        parse_args(["False", "-f", "notes.txt"])
+
+
+def test_file_path_with_folder_is_from_current_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert file_arg_path("./test.txt") == str(tmp_path / "test.txt")
+    assert file_arg_path("sub/test.txt") == str(tmp_path / "sub" / "test.txt")
+    assert file_arg_path("/abs/test.txt") == "/abs/test.txt"
+    assert file_arg_path("test.txt") == "test.txt"     # left for save_folder
+
+
+def test_dot_slash_file_is_written_in_current_folder(make, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    t = make(use_file=True)
+    t.save_folder = str(tmp_path / "save_folder")
+    t.file_name = file_arg_path("./test.txt")
+    type_text(t, "here")
+    t.carriage_return()
+    assert (tmp_path / "test.txt").read_text() == "here\n"
+
+
+def test_plain_file_name_goes_in_save_folder(make, tmp_path):
+    t = make(use_file=True)
+    t.save_folder = str(tmp_path)
+    t.file_name = "notes.txt"
+    (tmp_path / "notes.txt").write_text("already here\n")
+    type_text(t, "more")
+    t.carriage_return()
+    assert (tmp_path / "notes.txt").read_text() == "already here\nmore\n"
+
+
+def test_full_file_path_ignores_save_folder(make, tmp_path):
+    t = make(use_file=True)
+    t.save_folder = str(tmp_path / "elsewhere")
+    t.file_name = str(tmp_path / "chosen.txt")
+    type_text(t, "hi")
+    t.carriage_return()
+    assert (tmp_path / "chosen.txt").read_text() == "hi\n"
+
+
 # ----------------------------
 # config saving
 # ----------------------------
@@ -955,3 +1004,32 @@ def test_zebra_close_restores_saved_printer_settings(tmp_path):
     assert sent.startswith(b"^XA^PW")       # setup first
     assert sent.count(b"^JUR") == 1
     assert sent.rstrip().endswith(b"^XA^JUR^XZ")
+
+
+# ----------------------------
+# info panel
+# ----------------------------
+
+def test_short_path_leaves_short_paths_alone():
+    assert short_path("2026-11-17-202444.txt", 70) == "2026-11-17-202444.txt"
+    assert short_path("/tmp/a.txt", 70) == "/tmp/a.txt"
+
+
+def test_short_path_uses_tilde_for_home(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/someone")
+    assert short_path("/home/someone/writing/a.txt", 70) == "~/writing/a.txt"
+    assert short_path("/home/someoneelse/a.txt", 70) == "/home/someoneelse/a.txt"
+
+
+def test_short_path_cuts_at_folder_and_keeps_file_name():
+    deep = "/data/" + "/".join(f"folder{i}" for i in range(20)) + "/chapter-12.txt"
+    short = short_path(deep, 40)
+    assert len(short) <= 40
+    assert short.startswith(".../") and short.endswith("/folder19/chapter-12.txt")
+
+
+def test_short_path_huge_file_name_still_fits():
+    short = short_path("/x/" + "a" * 100 + ".txt", 30)
+    assert len(short) == 30 and short.startswith("...") and short.endswith("a.txt")
+    assert short_path("abcdef", 2) == "ef"
+    assert short_path("abcdef", 0) == ""
