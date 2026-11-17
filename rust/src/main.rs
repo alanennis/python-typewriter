@@ -40,7 +40,8 @@ struct Args {
     /// printer to use (overrides printer in config.toml)
     #[arg(short, long, value_enum)]
     printer: Option<PrinterChoice>,
-    /// config file to use (default: config.toml in the project folder)
+    /// config file to use (default: config.toml next to this binary,
+    /// created on the first run)
     #[arg(short, long)]
     config: Option<PathBuf>,
 }
@@ -228,7 +229,17 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let config_path = args.config.unwrap_or_else(config::default_config_path);
+    let config_path = match args.config {
+        Some(p) => p,
+        None => {
+            let p = config::default_config_path()?;
+            if config::create_if_missing(&p)? {
+                // stays on screen after the typewriter exits
+                println!("created {} with the starting settings", p.display());
+            }
+            p
+        }
+    };
     let mut cfg = Config::load(&config_path)?;
     match args.printer {
         Some(PrinterChoice::Epson) => cfg.set_str("printer", "epson"),

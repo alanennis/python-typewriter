@@ -5,10 +5,34 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// the config.toml beside the python version, one folder up from this
-/// crate. --config overrides it
-pub fn default_config_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("config.toml")
+/// the starting config, built into the binary. @PROJECT_DIR@ stands for the
+/// project folder, where the bell sounds are
+const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
+
+/// config.toml in the same folder as the running binary. --config
+/// overrides it
+pub fn default_config_path() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("can't find where the binary is: {e}"))?;
+    let dir = exe.parent().ok_or("the binary has no folder")?;
+    Ok(dir.join("config.toml"))
+}
+
+/// the built-in starting config with the project folder filled in
+pub fn default_config_text() -> String {
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let project = project.canonicalize().unwrap_or(project);
+    DEFAULT_CONFIG.replace("@PROJECT_DIR@", &project.display().to_string())
+}
+
+/// write the starting config to path if there's nothing there yet.
+/// true if it was created
+pub fn create_if_missing(path: &Path) -> Result<bool, String> {
+    if path.exists() {
+        return Ok(false);
+    }
+    fs::write(path, default_config_text())
+        .map_err(|e| format!("can't create the config file {}: {e}", path.display()))?;
+    Ok(true)
 }
 
 /// the loaded config, with typed lookups
@@ -233,9 +257,22 @@ save_folder = \"/somewhere/\"
     }
 
     #[test]
-    fn real_config_parses() {
-        let cfg = Config::load(&default_config_path()).unwrap();
+    fn built_in_config_parses_and_finds_the_bell() {
+        let cfg = Config::parse(&default_config_text()).unwrap();
         assert!(cfg.int("width").is_some());
         assert!(cfg.int("printer_vendor_id").is_some()); // hex number
+        let bell = cfg.str("bell_sound").unwrap();
+        assert!(!bell.contains('@'));
+        assert!(Path::new(bell).is_file(), "{bell}");
+    }
+
+    #[test]
+    fn config_created_only_when_missing() {
+        let (_d, path) = write("width = 1\n");
+        assert!(!create_if_missing(&path).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "width = 1\n");
+        fs::remove_file(&path).unwrap();
+        assert!(create_if_missing(&path).unwrap());
+        assert!(Config::load(&path).unwrap().int("width").is_some());
     }
 }
