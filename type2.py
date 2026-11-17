@@ -788,4 +788,3 @@ if __name__ == "__main__":
 # TODO file handling to rename file
 # TODO command line startup options to set attributes without having
 #      to edit the script directly
-# TODO convert this to rust as a project and so that it is BLAZING fast

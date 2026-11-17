@@ -30,6 +30,15 @@ label, upside down by default so a torn-off strip reads in order
 (`zebra_upright = true` turns that off). `zebra_lines.py` on its own
 is a quick line-at-a-time test for the zebra.
 
+## rust version
+
+there's a rust port in [`rust/`](./rust/README.md): same keys, same screen,
+same `config.toml`, one binary with no venv.
+
+```
+cd rust && cargo build --release && target/release/typewriter
+```
+
 ## tests
 
 ```
