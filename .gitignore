@@ -1,5 +1,5 @@
-/old
-/venv
-/type.log
+/python/old/
+/python/venv/
+/python/type.log
 __pycache__/
 .pytest_cache/

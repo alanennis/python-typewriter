@@ -5,8 +5,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// the starting config, built into the binary. @PROJECT_DIR@ stands for the
-/// project folder, where the bell sounds are
+/// the starting config, built into the binary. @RUST_DIR@ stands for this
+/// crate's folder, where the bell sounds are
 const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
 
 /// config.toml in the same folder as the running binary. --config
@@ -17,11 +17,9 @@ pub fn default_config_path() -> Result<PathBuf, String> {
     Ok(dir.join("config.toml"))
 }
 
-/// the built-in starting config with the project folder filled in
+/// the built-in starting config with the crate folder filled in
 pub fn default_config_text() -> String {
-    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let project = project.canonicalize().unwrap_or(project);
-    DEFAULT_CONFIG.replace("@PROJECT_DIR@", &project.display().to_string())
+    DEFAULT_CONFIG.replace("@RUST_DIR@", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// write the starting config to path if there's nothing there yet.

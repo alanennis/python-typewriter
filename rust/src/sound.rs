@@ -229,8 +229,8 @@ impl BellSound {
 mod tests {
     use super::*;
 
-    fn project_dir() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+    fn crate_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
     #[test]
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn reads_both_ding_files() {
-        let dir = project_dir();
+        let dir = crate_dir();
         let w = parse_wav(&std::fs::read(dir.join("ding.wav")).unwrap()).unwrap();
         assert_eq!((w.sample_bytes, w.rate, w.channels), (2, 44100, 1));
         assert_eq!(w.frames.len(), 30869 * 2);

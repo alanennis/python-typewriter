@@ -24,8 +24,8 @@ binary (`target/release/config.toml` after a release build). it isn't
 shared with the python version's `config.toml`.
 
 if it's missing, the first run creates it from `config.default.toml`, which
-is built into the binary. `@PROJECT_DIR@` in that file is replaced with this
-project's folder, so the bell sound is still found wherever the binary
+is built into the binary. `@RUST_DIR@` in that file is replaced with this
+`rust/` folder (where its copies of the bell sounds are), so the bell is found wherever the binary
 goes. delete the file to start again from the defaults. alt-l, alt-r,
 alt-s and alt-b save back to it.
 
