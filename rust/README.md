@@ -7,8 +7,7 @@ a rust port of `type2.py`. same keys, same screen, same `config.toml`.
 needs rust 1.85+ and libusb (`sudo apt install libusb-1.0-0-dev pkg-config`)
 
 ```
-cd rust
-cargo build --release
+cargo build --release                     # from the top folder (or any folder in it)
 target/release/typewriter                 # uses config.toml next to the binary
 target/release/typewriter -p zebra        # or -p epson, overrides config
 target/release/typewriter False           # don't save to a file
@@ -20,8 +19,9 @@ target/release/typewriter --config ~/my.toml
 ## settings
 
 the rust version has its own `config.toml`, in the same folder as the
-binary (`target/release/config.toml` after a release build). it isn't
-shared with the python version's `config.toml`.
+binary (`target/release/config.toml` in the top folder after a release
+build). the window version (`../rust-gui`) is built next to it, so it
+uses the same file. it isn't shared with the python version's `config.toml`.
 
 if it's missing, the first run creates it from `config.default.toml`, which
 is built into the binary. `@RUST_DIR@` in that file is replaced with this
@@ -31,6 +31,8 @@ alt-s and alt-b save back to it.
 
 things to know:
 
+- this folder and `../rust-gui` are one cargo workspace (`../Cargo.toml`),
+  so the build goes in the top `target/` folder, not `rust/target/`.
 - `cargo clean` deletes `target/`, and this config with it. copy the
   binary somewhere else (`cp target/release/typewriter ~/bin/`) to keep its
   config out of harm's way; it makes a fresh one there on the first run.
@@ -47,7 +49,7 @@ to `type.log` in the current folder, as before.
 ## tests
 
 ```
-cargo test
+cargo test                # tests this and the window version
 ```
 
 ## layout
@@ -55,7 +57,8 @@ cargo test
 | file | what | python |
 |---|---|---|
 | `src/typewriter.rs` | the machine: buffer, margins, bells, alignment | `Typewriter` class |
-| `src/main.rs` | screen, keys, command line, startup | curses functions, `run()` |
+| `src/main.rs` | terminal screen and keys | curses functions, `run()` |
+| `src/front.rs` | command line, startup, alt commands, panel layout (shared with `../rust-gui`) | `key_check`, `show_handy_settings`, `run()` |
 | `src/config.rs` | load config, save settings keeping comments | `save_settings_to_config` |
 | `src/printer.rs` | epson ESC/POS, picking a printer | `EpsonPrinter`, `open_printer` |
 | `src/zebra.rs` | ZPL lines, font drawing, zebra connection | `zebra_lines.py` |

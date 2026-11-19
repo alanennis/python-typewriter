@@ -10,12 +10,14 @@ there are three versions with the same keys and screen:
 - [`rust/`](./rust/README.md): a port that builds to a single binary, no venv needed
 - [`rust-gui/`](./rust-gui/README.md): the rust version in a window instead of a terminal
 
-each folder has its own `config.toml` and bell sounds.
+the python version has its own `config.toml`. the two rust versions are one
+cargo workspace (`Cargo.toml` at the top): they build together into the top
+`target/` folder and share the `config.toml` there.
 
 ```
 cd python && venv/bin/python type2.py        # see python/README.md for setup
-cd rust && cargo build --release && target/release/typewriter
-cd rust-gui && cargo build --release && target/release/typewriter-gui
+cargo build --release && target/release/typewriter    # builds both rust versions
+target/release/typewriter-gui
 ```
 
 ![screenshot](./python/screenshot.png)

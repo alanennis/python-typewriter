@@ -1,0 +1,11 @@
+# one workspace for both rust versions: they share a single target/ folder
+# and Cargo.lock here at the top. `cargo build --release` builds both;
+# `cargo test` tests both.
+[workspace]
+members = ["rust", "rust-gui"]
+resolver = "3"
+
+# release settings have to live here, not in the members
+[profile.release]
+strip = true
+lto = true

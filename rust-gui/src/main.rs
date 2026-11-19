@@ -1,17 +1,15 @@
 //! typewriter for a line printer, in a window. the machine, printers,
-//! config and bell all come from the terminal version's library in ../rust;
-//! this file is only the window and the keys.
+//! config, command line and panel layout all come from the terminal
+//! version's library in ../rust; this file is only the window and the keys.
 
-use clap::{Parser, ValueEnum};
 use eframe::egui::{self, Align2, Color32, Event, FontId, Key, Pos2, Rect, Sense, Vec2};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use typewriter::config::{self, Config, Setting};
-use typewriter::printer::{open_printer, printer_name};
+use typewriter::front::{self, Args, Look, Setup};
 use typewriter::sound::BellSound;
-use typewriter::typewriter::{Options, Sound, Typewriter};
+use typewriter::typewriter::{Sound, Typewriter};
 
 /// rows of text the window lays out: 4 lines of typing, the tab bar, the
 /// settings, the help and a message line at the bottom
@@ -22,103 +20,6 @@ const MESSAGE_ROW: usize = 16;
 /// how long the line flashes when the machine beeps
 const FLASH: Duration = Duration::from_millis(150);
 const BLINK: Duration = Duration::from_millis(530);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-enum PrinterChoice {
-    Epson,
-    Zebra,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-enum YesNo {
-    #[value(name = "True")]
-    True,
-    #[value(name = "False")]
-    False,
-}
-
-/// typewriter for a line printer, in a window. anything given here
-/// overrides config.toml
-#[derive(Parser, Debug)]
-struct Args {
-    /// save typed lines to a file (overrides use_file)
-    use_file: Option<YesNo>,
-    /// printer to use (overrides printer in config.toml)
-    #[arg(short, long, value_enum)]
-    printer: Option<PrinterChoice>,
-    /// config file to use (default: config.toml next to this binary,
-    /// created on the first run)
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-    /// file to write to instead of a dated one. a plain name goes in
-    /// save_folder; a path (./test.txt, ~/notes.txt) is taken from the
-    /// current folder. lines are added to the end if it already exists.
-    /// turns on saving to a file
-    #[arg(short, long, value_name = "NAME")]
-    file: Option<String>,
-}
-
-impl Args {
-    /// parse and check the options go together
-    fn parse_checked<I, T>(args: I) -> Result<Self, clap::Error>
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<std::ffi::OsString> + Clone,
-    {
-        let a = Args::try_parse_from(args)?;
-        if a.file.is_some() && a.use_file == Some(YesNo::False) {
-            return Err(<Args as clap::CommandFactory>::command().error(
-                clap::error::ErrorKind::ArgumentConflict,
-                "--file and False don't go together: False turns off the file",
-            ));
-        }
-        Ok(a)
-    }
-}
-
-/// where --file NAME writes. a plain name goes in save_folder (it's
-/// returned as it is, to be joined on later); a path with a folder in it,
-/// like ./test.txt, is taken from the current folder
-fn file_arg_path(name: &str) -> String {
-    if name.contains('/') {
-        if let Ok(p) = std::path::absolute(name) {
-            return p.display().to_string();
-        }
-    }
-    name.to_string()
-}
-
-fn py_bool(b: bool) -> &'static str {
-    if b { "True" } else { "False" }
-}
-
-/// a path cut down to fit in width columns: the home folder becomes ~,
-/// then if it's still too long the start is replaced with ... (at a folder
-/// boundary where possible) so the file name shows
-fn short_path(text: &str, width: usize, home: Option<&str>) -> String {
-    let mut text = text.to_string();
-    if let Some(home) = home.filter(|h| !h.is_empty()) {
-        if text == home || text.starts_with(&format!("{home}/")) {
-            text = format!("~{}", &text[home.len()..]);
-        }
-    }
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= width {
-        return text;
-    }
-    if width <= 3 {
-        return chars[chars.len() - width..].iter().collect();
-    }
-    let mut tail: String = chars[chars.len() - (width - 3)..].iter().collect();
-    if let Some(slash) = tail.find('/').filter(|&i| i > 0) {
-        tail = tail[slash..].to_string();
-    }
-    format!("...{tail}")
-}
-
-fn short_home_path(text: &str, width: usize) -> String {
-    short_path(text, width, std::env::var("HOME").ok().as_deref())
-}
 
 /// something the keyboard asked for, the same keys as the terminal version
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,46 +86,11 @@ fn actions_for(event: &Event, alt_down: bool) -> Vec<Action> {
     }
 }
 
-fn save(config_path: &Path, settings: &[(&str, Setting)]) {
-    if let Err(e) = config::save_settings(config_path, settings) {
-        typewriter::log_warning(&format!("can't save settings to {}: {e}", config_path.display()));
-    }
-}
-
-fn save_margins(m: &Typewriter, config_path: &Path) {
-    save(config_path, &[("left_margin", m.left_margin.into()), ("right_margin", m.right_margin.into())]);
-}
-
 /// do what the key asks. Ok(false) means quit
 fn apply(action: Action, m: &mut Typewriter, config_path: &Path) -> Result<bool, String> {
     match action {
         Action::Quit => return Ok(false),
-        Action::Alt(c) => match c {
-            'a' => m.toggle_autoreturn(),
-            'c' => m.centre_text(),
-            'b' => {
-                m.toggle_bell();
-                save(config_path, &[("bell", m.bell_on.into())]);
-            }
-            'p' => m.toggle_printer(),
-            'j' => m.right_justify(),
-            'h' => m.toggle_help(),
-            'l' => {
-                m.margin_set_left();
-                save_margins(m, config_path);
-            }
-            'n' => m.toggle_margin_release(),
-            'q' => return Ok(false),
-            'r' => {
-                m.margin_set_right();
-                save_margins(m, config_path);
-            }
-            's' => {
-                m.toggle_line_space();
-                save(config_path, &[("spacing_index", m.spacing_index.into())]);
-            }
-            _ => {}
-        },
+        Action::Alt(c) => return Ok(front::alt_command(c, m, config_path)),
         Action::DeleteWord => m.delete_word(),
         Action::Char(c) => m.char_add(c)?,
         Action::Backspace => m.backspace(),
@@ -266,6 +132,13 @@ impl Palette {
                 highlight: Color32::from_rgb(0x3a, 0x7a, 0x7a),
                 error: Color32::from_rgb(0xb0, 0x30, 0x30),
             }
+        }
+    }
+
+    fn look(&self, look: Look) -> Color32 {
+        match look {
+            Look::Dim => self.dim,
+            Look::Highlight => self.highlight,
         }
     }
 }
@@ -422,16 +295,6 @@ impl TypewriterApp {
         }
     }
 
-    /// a setting on the info panel that can be clicked as well as keyed
-    fn clickable(&self, ui: &mut egui::Ui, g: &Grid, row: usize, col: usize, text: &str) -> bool {
-        let rect = g.cells(row, col, text.chars().count());
-        let r = ui.interact(rect, ui.id().with((row, col)), Sense::CLICK);
-        if r.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        r.clicked()
-    }
-
     fn draw(&mut self, ui: &mut egui::Ui, pal: &Palette) {
         let Some(m) = self.machine.as_ref() else { return };
         let cols = MIN_COLS.max(m.width + 1);
@@ -457,45 +320,20 @@ impl TypewriterApp {
         g.put(&p, 3, 0, &typing, pal.typing);
         g.put(&p, 4, 0, &m.give_tab_bar(), pal.dim);
 
-        // the settings
-        let r = 6;
-        let ls = format!("LS={}", m.current_spacing);
-        let artn = format!("A-RTN={}", py_bool(m.autoreturn));
-        g.put(&p, r, 0, &format!("Width={}", m.width), pal.dim);
-        g.put(&p, r, 10, &ls, pal.dim);
-        g.put(&p, r, 17, &artn, pal.dim);
-        g.put(&p, r, 30, &format!("LM={}", m.left_margin), pal.dim);
-        g.put(&p, r, 36, &format!("RM={}", m.right_margin), pal.dim);
-        if m.centre_mode() {
-            g.put(&p, r, 44, "CENTRE", pal.highlight);
-        } else if m.right_mode() {
-            g.put(&p, r, 44, "RIGHT", pal.highlight);
-        }
-        let file_name = short_home_path(&m.file_name, cols - 1 - "File=".len());
-        g.put(&p, r + 1, 0, &format!("File={file_name}"), pal.dim);
-        g.put(&p, r + 2, 0, &format!("Printer Found={}", py_bool(m.printer_found)), pal.dim);
-        g.put(&p, r + 2, 20, &format!("LC={}", m.line_count), pal.dim);
-        g.put(&p, r + 2, 27, &format!("WC={}", m.word_count), pal.dim);
-        g.put(&p, r + 2, 37, &format!("File={}", py_bool(m.use_file)), pal.highlight);
-        g.put(&p, r + 3, 0, &format!("Printer={}", m.printer_name), pal.dim);
-        let printing = format!("Printing={}", py_bool(m.use_printer));
-        let bell = format!("Bell={}", py_bool(m.bell_on));
-        g.put(&p, r + 3, 20, &printing, pal.highlight);
-        g.put(&p, r + 3, 37, &bell, pal.highlight);
-        let help = "alt-h for help";
-        g.put(&p, r + 4, 0, help, pal.dim);
-
-        if m.help_wanted {
-            let folder = short_home_path(&m.save_folder, cols - 1 - "file path:".len());
-            let lines = [
-                "arrows/home/end move, del deletes, alt+backspace deletes a word. alt+ below:".to_string(),
-                "l = set left margin  r = set right margin       s = toggle line spacing".into(),
-                "a = set autoreturn   n = toggle margin release  q = quit  p = printer on/off".into(),
-                "c = centre text      j = right justify (enter to finish)  b = bell on/off".into(),
-                format!("file path:{folder}"),
-            ];
-            for (i, line) in lines.iter().enumerate() {
-                g.put(&p, 11 + i, 0, line, pal.dim);
+        // the settings and help; the ones with an alt key can be clicked
+        let mut clicked = None;
+        for item in front::panel(m, cols - 1) {
+            g.put(&p, item.row, item.col, &item.text, pal.look(item.look));
+            if let Some(key) = item.key {
+                let rect = g.cells(item.row, item.col, item.text.chars().count());
+                // not focusable, so the keyboard stays the typewriter's
+                let r = ui.interact(rect, ui.id().with((item.row, item.col)), Sense::CLICK);
+                if r.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if r.clicked() {
+                    clicked = Some(key);
+                }
             }
         }
 
@@ -505,23 +343,9 @@ impl TypewriterApp {
             g.put(&p, MESSAGE_ROW, 0, msg, pal.highlight);
         }
 
-        // the highlighted settings can be clicked too
-        let key = if self.clickable(ui, &g, r, 10, &ls) {
-            Some('s')
-        } else if self.clickable(ui, &g, r, 17, &artn) {
-            Some('a')
-        } else if self.clickable(ui, &g, r + 3, 20, &printing) {
-            Some('p')
-        } else if self.clickable(ui, &g, r + 3, 37, &bell) {
-            Some('b')
-        } else if self.clickable(ui, &g, r + 4, 0, help) {
-            Some('h')
-        } else {
-            None
-        };
-        if let (Some(c), Some(m)) = (key, self.machine.as_mut()) {
-            // these never fail or quit
-            let _ = apply(Action::Alt(c), m, &self.config_path);
+        if let (Some(c), Some(m)) = (clicked, self.machine.as_mut()) {
+            // the clickable ones never quit
+            front::alt_command(c, m, &self.config_path);
         }
 
         // keep the blink and the flash going
@@ -578,66 +402,30 @@ fn window_options(size: [f32; 2]) -> eframe::NativeOptions {
 
 /// load the config and build the machine
 fn build(args: Args) -> Result<TypewriterApp, String> {
-    let mut message = None;
-    let config_path = match args.config {
-        Some(p) => p,
-        None => {
-            let p = config::default_config_path()?;
-            if config::create_if_missing(&p)? {
-                message = Some(format!("created {} with the starting settings", p.display()));
-            }
-            p
-        }
-    };
-    let mut cfg = Config::load(&config_path)?;
-    match args.printer {
-        Some(PrinterChoice::Epson) => cfg.set_str("printer", "epson"),
-        Some(PrinterChoice::Zebra) => cfg.set_str("printer", "zebra"),
-        None => {}
-    }
-
-    let width = cfg.require_usize("width")?;
-    let opts = Options {
-        width,
-        autoreturn: cfg.require_bool("autoreturn")?,
-        spacing_index: cfg.require_usize("spacing_index")?,
-        margin_bell: cfg.require_usize("margin_bell")?,
-        left_margin: cfg.require_usize("left_margin")?,
-        right_margin: Some(cfg.int("right_margin").map_or(width, |v| v.max(0) as usize)),
-        use_file: match args.use_file {
-            Some(v) => v == YesNo::True,
-            None => cfg.bool("use_file").unwrap_or(true),
-        },
-        use_printer: cfg.bool("use_printer").unwrap_or(true),
-        printer_name: printer_name(&cfg),
-        bell_on: cfg.bool("bell").unwrap_or(true),
-    };
-    // always open the printer so alt-p can turn printing on even if
-    // use_printer starts off false in the config
-    let printer = open_printer(&cfg)?;
+    let setup = Setup::load(&args)?;
+    let message = setup
+        .created
+        .then(|| format!("created {} with the starting settings", setup.config_path.display()));
+    let opts = setup.options(&args)?;
+    let printer = setup.printer()?;
 
     let flash = Rc::new(Cell::new(None));
-    let base_dir = config_path.parent().unwrap_or(Path::new("."));
-    let ding: Option<Sound> = BellSound::new(cfg.str("bell_sound").unwrap_or("ding.wav"), base_dir)
-        .map(|mut s| -> Sound {
-            let mut beep = make_beep(flash.clone());
-            Box::new(move || {
-                if !s.play() {
-                    beep();
-                }
-            })
-        });
+    let (bell_file, bell_dir) = setup.bell_sound();
+    let ding: Option<Sound> = BellSound::new(bell_file, bell_dir).map(|mut s| -> Sound {
+        let mut beep = make_beep(flash.clone());
+        Box::new(move || {
+            if !s.play() {
+                beep();
+            }
+        })
+    });
 
     let mut machine = Typewriter::new(opts, printer, Some(make_beep(flash.clone())), ding);
-    machine.save_folder = cfg.require_str("save_folder")?.to_string();
-    if let Some(file) = args.file {
-        machine.file_name = file_arg_path(&file);
-        machine.use_file = true;
-    }
+    setup.set_file(&mut machine, &args)?;
 
     Ok(TypewriterApp {
         machine: Some(machine),
-        config_path,
+        config_path: setup.config_path,
         flash,
         message,
         error: None,
@@ -673,6 +461,7 @@ fn main() {
 mod tests {
     use super::*;
     use egui::Modifiers;
+    use typewriter::typewriter::Options;
 
     fn key(key: Key, modifiers: Modifiers) -> Event {
         Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
@@ -738,18 +527,5 @@ mod tests {
         let p = beep_wav_path().unwrap();
         let w = typewriter::sound::parse_wav(&std::fs::read(p).unwrap()).unwrap();
         assert_eq!((w.sample_bytes, w.rate, w.channels), (2, 44100, 1));
-    }
-
-    #[test]
-    fn short_path_fits() {
-        assert_eq!(short_path("/home/me/writing/a.txt", 70, Some("/home/me")), "~/writing/a.txt");
-        let short = short_path(&format!("/x/{}.txt", "a".repeat(100)), 30, None);
-        assert!(short.len() == 30 && short.starts_with("...") && short.ends_with("a.txt"));
-    }
-
-    #[test]
-    fn file_option_clashes_with_false() {
-        assert!(Args::parse_checked(["typewriter-gui", "False", "-f", "notes.txt"]).is_err());
-        assert_eq!(file_arg_path("test.txt"), "test.txt");
     }
 }

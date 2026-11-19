@@ -3,7 +3,8 @@
 the same typewriter as `../rust`, in its own window instead of a terminal.
 it uses the `rust/` crate as a library, so the typing, margins, bells,
 centring, the epson and zebra printers and the config saving are the very
-same code. only the window and the keys are new (`src/main.rs`, using
+same code, as are the command line, the alt commands and the settings
+panel (`../rust/src/front.rs`). only the window and the keys are new (`src/main.rs`, using
 [egui](https://github.com/emilk/egui)).
 
 runs on wayland (KDE, GNOME…) and X11.
@@ -14,8 +15,7 @@ needs rust 1.85+ and libusb (`sudo apt install libusb-1.0-0-dev pkg-config`),
 the same as `../rust`.
 
 ```
-cd rust-gui
-cargo build --release
+cargo build --release                         # from the top folder; builds both versions
 target/release/typewriter-gui                 # uses config.toml next to the binary
 target/release/typewriter-gui -p zebra        # same options as the terminal version
 target/release/typewriter-gui False
@@ -42,14 +42,15 @@ extras for the window:
 
 ## settings
 
-like the terminal version, it keeps its own `config.toml` next to the
-binary (`target/release/config.toml`), made from `../rust/config.default.toml`
-on the first run. it isn't shared with the terminal version's config. see
+it keeps its `config.toml` next to the binary (`target/release/config.toml`
+in the top folder), made from `../rust/config.default.toml` on the first
+run. the terminal version is built into the same folder, so the two share
+it: settings changed in one show up in the other. see
 `../rust/README.md` for the details. warnings go to `type.log` in the
 current folder.
 
 ## tests
 
 ```
-cargo test
+cargo test        # tests this and the terminal version
 ```

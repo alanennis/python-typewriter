@@ -4,6 +4,7 @@
 //! or a printer attached.
 
 pub mod config;
+pub mod front;
 pub mod printer;
 pub mod sound;
 pub mod typewriter;

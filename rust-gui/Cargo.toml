@@ -12,9 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 # the typewriter itself (buffer, margins, printers, config, bell) is shared
-# with the terminal version in ../rust
+# with the terminal version in ../rust, as are the command line options
 typewriter = { path = "../rust" }
-clap = { version = "4.5", features = ["derive"] }
 # 0.32 is the newest eframe that builds on rust 1.85. wayland and x11 are
 # both on by default; winit picks wayland when it's running
 eframe = { version = "0.32", default-features = false, features = [
@@ -23,7 +22,3 @@ eframe = { version = "0.32", default-features = false, features = [
     "wayland",
     "x11",
 ] }
-
-[profile.release]
-strip = true
-lto = true
