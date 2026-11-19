@@ -801,6 +801,31 @@ def test_carriage_return_sends_line_and_spacing_to_printer(make):
     assert printer.lines == [("hello", 2)]
 
 
+def test_finish_line_saves_and_prints_unfinished_line(make, tmp_path):
+    printer = FakePrinter()
+    t = make(use_file=True, use_printer=True, printer=printer)
+    t.save_folder = str(tmp_path)
+    type_text(t, "first")
+    t.carriage_return()
+    type_text(t, "no enter yet")
+    t.finish_line()
+    assert (tmp_path / t.file_name).read_text() == "first\nno enter yet\n"
+    assert [line for line, _ in printer.lines] == ["first", "no enter yet"]
+    assert t.line_count == 2
+
+
+def test_finish_line_leaves_blank_line_alone(make, tmp_path):
+    printer = FakePrinter()
+    t = make(use_file=True, use_printer=True, printer=printer, left_margin=5)
+    t.save_folder = str(tmp_path)
+    type_text(t, "done")
+    t.carriage_return()
+    t.finish_line()   # only the left margin's spaces
+    assert (tmp_path / t.file_name).read_text() == "     done\n"
+    assert len(printer.lines) == 1
+    assert t.line_count == 1
+
+
 def test_printer_not_used_when_use_printer_off(make):
     printer = FakePrinter()
     t = make(use_printer=False, printer=printer)

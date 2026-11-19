@@ -461,6 +461,13 @@ class Typewriter():
         self.align_chars = []
 
 
+    def finish_line(self):
+        """on quitting: finish a line that has something typed on it, as
+        enter would (to the file and the printer), so it isn't lost. a
+        blank line is left alone so quitting doesn't add an empty line"""
+        if self.give_buffer().strip():
+            self.carriage_return()
+
     def send_to_printer(self, buffer):
         """ send buffer to the printer"""
         if self.printer_found:
@@ -680,6 +687,8 @@ def key_check(stdscr, key, machine):
             case 110: # alt+n toggle margin release
                 machine.toggle_margin_release()
             case 113: #alt+q pressed so quit
+                # a line typed without pressing enter is still kept
+                machine.finish_line()
                 quit()
             case 114: #alt+r set right margin
                 machine.margin_set_right()
@@ -821,7 +830,11 @@ def run():
     # use it for an esc sequence the line below calls
     # a function that sets an env variable to adjust the delay
     set_shorter_esc_delay_in_os('150')
-    wrapper(main, machine)
+    try:
+        wrapper(main, machine)
+    except KeyboardInterrupt:
+        # ctrl-c: keep the line being typed and quit quietly, like alt-q
+        machine.finish_line()
 
 
 if __name__ == "__main__":
