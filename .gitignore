@@ -3,3 +3,5 @@
 /python/type.log
 __pycache__/
 .pytest_cache/
+/rust-gui/type.log
+/rust-gui/target/
