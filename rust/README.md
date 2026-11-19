@@ -70,6 +70,8 @@ cargo test
 - a failed print is logged to `type.log` instead of crashing the program;
   the line is still in the file.
 - ctrl-c quits cleanly, restoring the zebra's settings.
+- quitting finishes a line typed without pressing enter, so it goes to
+  the file and the printer instead of being lost (python dropped it).
 - with `zebra_font`, letters can differ from python's by the odd dot on
   curved edges (pillow uses freetype's hinting, ab_glyph doesn't). size,
   position and spacing are the same.

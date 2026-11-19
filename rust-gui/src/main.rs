@@ -377,8 +377,19 @@ struct TypewriterApp {
 
 impl TypewriterApp {
     fn quit(&mut self, ctx: &egui::Context) {
-        self.machine = None;
+        self.shut_down();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// keep a line typed without pressing enter, then drop the machine so
+    /// the printer is let go (the zebra gets its settings back)
+    fn shut_down(&mut self) {
+        if let Some(mut m) = self.machine.take() {
+            if let Err(e) = m.finish_line() {
+                typewriter::log_warning(&e);
+                eprintln!("{e}");
+            }
+        }
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
@@ -523,7 +534,7 @@ impl TypewriterApp {
 impl eframe::App for TypewriterApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if ctx.input(|i| i.viewport().close_requested()) {
-            self.machine = None;
+            self.shut_down();
             return;
         }
         self.handle_keys(ctx);

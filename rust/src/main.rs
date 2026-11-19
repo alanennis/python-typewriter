@@ -284,7 +284,8 @@ fn main_loop(m: &mut Typewriter, config_path: &Path) -> Result<(), String> {
         // anything that isn't a key press (a resize, say) just redraws
         if let Some(key) = next_key().map_err(io_err)? {
             if let Flow::Quit = key_check(key, m, config_path)? {
-                return Ok(());
+                // a line typed without pressing enter is still kept
+                return m.finish_line();
             }
         }
     }

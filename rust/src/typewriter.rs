@@ -372,6 +372,16 @@ impl Typewriter {
         Ok(())
     }
 
+    /// on quitting: finish a line that has something typed on it, as enter
+    /// would (to the file and the printer), so it isn't lost. a blank
+    /// line is left alone so quitting doesn't add an empty line
+    pub fn finish_line(&mut self) -> Result<(), String> {
+        if self.give_buffer().trim().is_empty() {
+            return Ok(());
+        }
+        self.carriage_return()
+    }
+
     fn send_to_printer(&mut self, line: &str) {
         let (spacing, align) = (self.current_spacing, self.align);
         if let Some(p) = self.printer.as_mut() {
@@ -877,6 +887,40 @@ mod tests {
         t.carriage_return().unwrap();
         let text = std::fs::read_to_string(dir.path().join(&t.file_name)).unwrap();
         assert_eq!(text, "first\nsecond\n");
+    }
+
+    #[test]
+    fn finish_line_saves_and_prints_unfinished_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FakePrinter::default();
+        let mut t = with_printer(Options { use_file: true, use_printer: true, ..opts() }, &p);
+        t.save_folder = dir.path().display().to_string();
+        type_text(&mut t, "first");
+        t.carriage_return().unwrap();
+        type_text(&mut t, "no enter yet");
+        t.finish_line().unwrap();
+        let text = std::fs::read_to_string(dir.path().join(&t.file_name)).unwrap();
+        assert_eq!(text, "first\nno enter yet\n");
+        assert_eq!(p.texts(), ["first", "no enter yet"]);
+        assert_eq!(t.line_count, 2);
+    }
+
+    #[test]
+    fn finish_line_leaves_blank_line_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FakePrinter::default();
+        let mut t = with_printer(
+            Options { use_file: true, use_printer: true, left_margin: 5, ..opts() },
+            &p,
+        );
+        t.save_folder = dir.path().display().to_string();
+        type_text(&mut t, "done");
+        t.carriage_return().unwrap();
+        t.finish_line().unwrap(); // only the left margin's spaces
+        let text = std::fs::read_to_string(dir.path().join(&t.file_name)).unwrap();
+        assert_eq!(text, "     done\n");
+        assert_eq!(p.texts().len(), 1);
+        assert_eq!(t.line_count, 1);
     }
 
     #[test]
