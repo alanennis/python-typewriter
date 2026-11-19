@@ -287,8 +287,26 @@ impl Grid {
             .clamp(8.0, 72.0)
             .floor();
         let font = FontId::monospace(size);
-        let cell = ctx.fonts(|f| Vec2::new(f.glyph_width(&font, 'M'), f.row_height(&font)));
+        // measured from a laid out line, not one glyph: egui snaps each
+        // letter's advance to the pixel grid, and one glyph's width would
+        // drift away from the text a little more with every column
+        let cell = ctx.fonts(|f| {
+            let line = f.layout_no_wrap("M".repeat(200), font.clone(), Color32::WHITE);
+            Vec2::new(line.size().x / 200.0, f.row_height(&font))
+        });
         Grid { origin: rect.min, cell, font }
+    }
+
+    /// where column col of text starts on the screen, from the text's own
+    /// layout so the cursor sits exactly on the letters
+    fn text_x(&self, ctx: &egui::Context, text: &str, col: usize) -> f32 {
+        let galley = ctx.fonts(|f| f.layout_no_wrap(text.to_string(), self.font.clone(), Color32::WHITE));
+        let x = match galley.rows.first().and_then(|r| r.glyphs.get(col)) {
+            Some(glyph) => glyph.pos.x,
+            // past the end of the text: carry on from its right edge
+            None => galley.size().x + (col - text.chars().count().min(col)) as f32 * self.cell.x,
+        };
+        self.origin.x + x
     }
 
     fn cells(&self, row: usize, col: usize, len: usize) -> Rect {
@@ -419,10 +437,13 @@ impl TypewriterApp {
         }
         // the cursor: a solid block while typing, blinking when idle
         let idle = self.last_key.elapsed();
+        let typing = m.give_buffer();
         if idle < BLINK || (idle.as_millis() / BLINK.as_millis()) % 2 == 0 {
-            p.rect_filled(g.cells(3, m.cursor, 1), 0.0, pal.typing.gamma_multiply(0.35));
+            let mut block = g.cells(3, 0, 1);
+            block = block.translate(Vec2::new(g.text_x(ui.ctx(), &typing, m.cursor) - block.min.x, 0.0));
+            p.rect_filled(block, 0.0, pal.typing.gamma_multiply(0.35));
         }
-        g.put(&p, 3, 0, &m.give_buffer(), pal.typing);
+        g.put(&p, 3, 0, &typing, pal.typing);
         g.put(&p, 4, 0, &m.give_tab_bar(), pal.dim);
 
         // the settings
