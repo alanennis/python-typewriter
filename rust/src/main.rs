@@ -8,7 +8,9 @@ use crossterm::terminal::{self, BeginSynchronizedUpdate, Clear, ClearType, EndSy
 use crossterm::{cursor, execute, queue};
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::{Duration, Instant};
 use typewriter::front::{self, Args, Look, Setup};
+use typewriter::session::Session;
 use typewriter::sound::BellSound;
 use typewriter::typewriter::{Sound, Typewriter};
 
@@ -29,13 +31,14 @@ fn put(out: &mut impl Write, row: usize, col: usize, text: &str, color: Color) -
 }
 
 fn show_buffers(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
-    put(out, 4, 0, &m.give_tab_bar(), DIM)?;
-    put(out, 0, 0, &m.prev_buf_3, DIM)?;
-    put(out, 1, 0, &m.prev_buf_2, DIM)?;
-    put(out, 2, 0, &m.prev_buf_1, DIM)?;
-    put(out, 3, 0, &m.give_buffer(), TYPING)?;
+    let rows = front::rows(m);
+    put(out, rows.tab_bar, 0, &m.give_tab_bar(), DIM)?;
+    for (row, line) in m.shown_previous().into_iter().enumerate() {
+        put(out, row, 0, line, DIM)?;
+    }
+    put(out, rows.typing, 0, &m.give_buffer(), TYPING)?;
     // put the screen cursor where the machine says the next character goes
-    queue!(out, cursor::MoveTo(m.cursor as u16, 3))
+    queue!(out, cursor::MoveTo(m.cursor as u16, rows.typing as u16))
 }
 
 fn draw(out: &mut impl Write, m: &Typewriter) -> io::Result<()> {
@@ -63,6 +66,7 @@ enum Flow {
 fn key_check(key: KeyEvent, m: &mut Typewriter, config_path: &Path) -> Result<Flow, String> {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    m.session.key(Instant::now());
     match key.code {
         KeyCode::Char('c') if ctrl => return Ok(Flow::Quit),
         KeyCode::Char(c) if alt => {
@@ -74,6 +78,7 @@ fn key_check(key: KeyEvent, m: &mut Typewriter, config_path: &Path) -> Result<Fl
         KeyCode::Char(c) if !ctrl && (' '..='~').contains(&c) => m.char_add(c)?,
         KeyCode::Backspace => m.backspace(),
         KeyCode::Enter => m.carriage_return()?,
+        KeyCode::Tab => m.tab(),
         KeyCode::Left => m.cursor_left(),
         KeyCode::Right => m.cursor_right(),
         KeyCode::Home => m.cursor_home(),
@@ -102,25 +107,35 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// the next key, or None after a second without one (or for something
+/// that isn't a key), so the screen is redrawn and the session time moves on
 fn next_key() -> io::Result<Option<KeyEvent>> {
+    if !event::poll(Duration::from_secs(1))? {
+        return Ok(None);
+    }
     match event::read()? {
         Event::Key(k) if k.kind != KeyEventKind::Release => Ok(Some(k)),
         _ => Ok(None),
     }
 }
 
-fn main_loop(m: &mut Typewriter, config_path: &Path) -> Result<(), String> {
+fn main_loop(m: &mut Typewriter, config_path: &Path, note: Option<&str>) -> Result<(), String> {
     let io_err = |e: io::Error| format!("terminal problem: {e}");
     let _guard = TerminalGuard::new().map_err(io_err)?;
     let mut out = io::stdout();
 
     put(&mut out, 0, 0, "Typewriter starting up, press any key to go", HIGHLIGHT).map_err(io_err)?;
+    if let Some(note) = note {
+        put(&mut out, 2, 0, note, DIM).map_err(io_err)?;
+    }
     out.flush().map_err(io_err)?;
     while next_key().map_err(io_err)?.is_none() {}
+    // the session starts when typing does, not at the startup screen
+    m.session = Session::new(Instant::now());
 
     loop {
         draw(&mut out, m).map_err(io_err)?;
-        // anything that isn't a key press (a resize, say) just redraws
+        // anything that isn't a key press (a resize, a second going by) just redraws
         if let Some(key) = next_key().map_err(io_err)? {
             if let Flow::Quit = key_check(key, m, config_path)? {
                 // a line typed without pressing enter is still kept
@@ -133,12 +148,6 @@ fn main_loop(m: &mut Typewriter, config_path: &Path) -> Result<(), String> {
 /// load the config, build the machine and start the screen
 fn run() -> Result<(), String> {
     let args = Args::parse_checked(std::env::args_os()).unwrap_or_else(|e| e.exit());
-    let (cols, rows) = terminal::size().map_err(|e| format!("can't read terminal size: {e}"))?;
-    if rows < 16 || cols < 81 {
-        println!("terminal is too small please make it at least 16 lines by 81 columns");
-        return Ok(());
-    }
-
     let setup = Setup::load(&args)?;
     if setup.created {
         // stays on screen after the typewriter exits
@@ -157,8 +166,19 @@ fn run() -> Result<(), String> {
     });
 
     let mut machine = Typewriter::new(opts, printer, Some(Box::new(beep)), ding);
-    setup.set_file(&mut machine, &args)?;
-    main_loop(&mut machine, &setup.config_path)
+    let note = setup.set_file(&mut machine, &args)?;
+
+    // more previous lines need a taller terminal
+    let need = front::rows(&machine).total;
+    let (cols, rows) = terminal::size().map_err(|e| format!("can't read terminal size: {e}"))?;
+    if (rows as usize) < need || cols < 81 {
+        println!(
+            "terminal is too small please make it at least {need} lines by 81 columns \
+             (or show fewer previous lines with --lines or previous_lines in the config)"
+        );
+        return Ok(());
+    }
+    main_loop(&mut machine, &setup.config_path, note.as_deref())
 }
 
 fn main() {

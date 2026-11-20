@@ -9,6 +9,11 @@ bell = true # false switches off the margin bell and error beeps (alt-b toggles 
 bell_sound = "@RUST_DIR@/ding2.wav" # sound played at the margin bell, any wav/ogg file; "" for the terminal beep
 right_margin = 62 # set the distance to the right margin
 left_margin = 0
+tab_stops = [] # columns the tab key jumps to, like [10, 20] (alt-t sets one at the cursor)
+word_target = 0 # words to write each session, shown as Goal= on screen; 0 for none
+show_timer = true # show how long the session has been going, in minutes (alt-m toggles it)
+show_wpm = true # show words per minute (alt-w toggles it)
+previous_lines = 3 # finished lines shown above the typing, 0 to 7 (--lines N changes it)
 use_file = true
 use_printer = true
 save_folder = "/home/alane/Dropbox/writing/"

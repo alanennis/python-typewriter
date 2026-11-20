@@ -11,12 +11,8 @@ use typewriter::front::{self, Args, Look, Setup};
 use typewriter::sound::BellSound;
 use typewriter::typewriter::{Sound, Typewriter};
 
-/// rows of text the window lays out: 4 lines of typing, the tab bar, the
-/// settings, the help and a message line at the bottom
-const ROWS: usize = 17;
 /// fewest columns laid out; the help lines are 80 wide
 const MIN_COLS: usize = 81;
-const MESSAGE_ROW: usize = 16;
 /// how long the line flashes when the machine beeps
 const FLASH: Duration = Duration::from_millis(150);
 const BLINK: Duration = Duration::from_millis(530);
@@ -30,6 +26,7 @@ enum Action {
     DeleteWord,
     Backspace,
     Enter,
+    Tab,
     Left,
     Right,
     Home,
@@ -72,6 +69,7 @@ fn actions_for(event: &Event, alt_down: bool) -> Vec<Action> {
                 match key {
                     Key::Backspace => Some(Action::Backspace),
                     Key::Enter => Some(Action::Enter),
+                    Key::Tab => Some(Action::Tab),
                     Key::ArrowLeft => Some(Action::Left),
                     Key::ArrowRight => Some(Action::Right),
                     Key::Home => Some(Action::Home),
@@ -88,6 +86,7 @@ fn actions_for(event: &Event, alt_down: bool) -> Vec<Action> {
 
 /// do what the key asks. Ok(false) means quit
 fn apply(action: Action, m: &mut Typewriter, config_path: &Path) -> Result<bool, String> {
+    m.session.key(Instant::now());
     match action {
         Action::Quit => return Ok(false),
         Action::Alt(c) => return Ok(front::alt_command(c, m, config_path)),
@@ -95,6 +94,7 @@ fn apply(action: Action, m: &mut Typewriter, config_path: &Path) -> Result<bool,
         Action::Char(c) => m.char_add(c)?,
         Action::Backspace => m.backspace(),
         Action::Enter => m.carriage_return()?,
+        Action::Tab => m.tab(),
         Action::Left => m.cursor_left(),
         Action::Right => m.cursor_right(),
         Action::Home => m.cursor_home(),
@@ -151,12 +151,12 @@ struct Grid {
 }
 
 impl Grid {
-    /// the biggest font that fits cols by ROWS cells in rect
-    fn fit(ctx: &egui::Context, rect: Rect, cols: usize) -> Self {
+    /// the biggest font that fits cols by rows cells in rect
+    fn fit(ctx: &egui::Context, rect: Rect, cols: usize, rows: usize) -> Self {
         let probe = FontId::monospace(100.0);
         let (w, h) = ctx.fonts(|f| (f.glyph_width(&probe, 'M'), f.row_height(&probe)));
         let size = (rect.width() / (cols as f32 * w / 100.0))
-            .min(rect.height() / (ROWS as f32 * h / 100.0))
+            .min(rect.height() / (rows as f32 * h / 100.0))
             .clamp(8.0, 72.0)
             .floor();
         let font = FontId::monospace(size);
@@ -298,27 +298,32 @@ impl TypewriterApp {
     fn draw(&mut self, ui: &mut egui::Ui, pal: &Palette) {
         let Some(m) = self.machine.as_ref() else { return };
         let cols = MIN_COLS.max(m.width + 1);
-        let g = Grid::fit(ui.ctx(), ui.max_rect(), cols);
+        // the previous lines, typing, tab bar, settings and help, and a
+        // message line at the bottom
+        let rows = front::rows(m);
+        let message_row = rows.total;
+        let g = Grid::fit(ui.ctx(), ui.max_rect(), cols, rows.total + 1);
         let p = ui.painter().clone();
 
         // the typing, newest line at the bottom, the tab bar under it
-        g.put(&p, 0, 0, &m.prev_buf_3, pal.dim);
-        g.put(&p, 1, 0, &m.prev_buf_2, pal.dim);
-        g.put(&p, 2, 0, &m.prev_buf_1, pal.dim);
+        for (row, line) in m.shown_previous().into_iter().enumerate() {
+            g.put(&p, row, 0, line, pal.dim);
+        }
+        let typing_row = rows.typing;
         let flashing = self.flash.get().is_some_and(|t| t.elapsed() < FLASH);
         if flashing {
-            p.rect_filled(g.cells(3, 0, cols), 0.0, pal.error.gamma_multiply(0.25));
+            p.rect_filled(g.cells(typing_row, 0, cols), 0.0, pal.error.gamma_multiply(0.25));
         }
         // the cursor: a solid block while typing, blinking when idle
         let idle = self.last_key.elapsed();
         let typing = m.give_buffer();
         if idle < BLINK || (idle.as_millis() / BLINK.as_millis()) % 2 == 0 {
-            let mut block = g.cells(3, 0, 1);
+            let mut block = g.cells(typing_row, 0, 1);
             block = block.translate(Vec2::new(g.text_x(ui.ctx(), &typing, m.cursor) - block.min.x, 0.0));
             p.rect_filled(block, 0.0, pal.typing.gamma_multiply(0.35));
         }
-        g.put(&p, 3, 0, &typing, pal.typing);
-        g.put(&p, 4, 0, &m.give_tab_bar(), pal.dim);
+        g.put(&p, typing_row, 0, &typing, pal.typing);
+        g.put(&p, rows.tab_bar, 0, &m.give_tab_bar(), pal.dim);
 
         // the settings and help; the ones with an alt key can be clicked
         let mut clicked = None;
@@ -338,9 +343,9 @@ impl TypewriterApp {
         }
 
         if let Some(e) = &self.error {
-            g.put(&p, MESSAGE_ROW, 0, &format!("problem: {e}"), pal.error);
+            g.put(&p, message_row, 0, &format!("problem: {e}"), pal.error);
         } else if let Some(msg) = &self.message {
-            g.put(&p, MESSAGE_ROW, 0, msg, pal.highlight);
+            g.put(&p, message_row, 0, msg, pal.highlight);
         }
 
         if let (Some(c), Some(m)) = (clicked, self.machine.as_mut()) {
@@ -403,9 +408,10 @@ fn window_options(size: [f32; 2]) -> eframe::NativeOptions {
 /// load the config and build the machine
 fn build(args: Args) -> Result<TypewriterApp, String> {
     let setup = Setup::load(&args)?;
-    let message = setup
-        .created
-        .then(|| format!("created {} with the starting settings", setup.config_path.display()));
+    let mut notes: Vec<String> = Vec::new();
+    if setup.created {
+        notes.push(format!("created {} with the starting settings", setup.config_path.display()));
+    }
     let opts = setup.options(&args)?;
     let printer = setup.printer()?;
 
@@ -421,7 +427,8 @@ fn build(args: Args) -> Result<TypewriterApp, String> {
     });
 
     let mut machine = Typewriter::new(opts, printer, Some(make_beep(flash.clone())), ding);
-    setup.set_file(&mut machine, &args)?;
+    notes.extend(setup.set_file(&mut machine, &args)?);
+    let message = (!notes.is_empty()).then(|| notes.join("; "));
 
     Ok(TypewriterApp {
         machine: Some(machine),
@@ -487,6 +494,7 @@ mod tests {
     fn editing_keys() {
         let k = |k| actions_for(&key(k, Modifiers::NONE), false);
         assert_eq!(k(Key::Enter), vec![Action::Enter]);
+        assert_eq!(k(Key::Tab), vec![Action::Tab]);
         assert_eq!(k(Key::Backspace), vec![Action::Backspace]);
         assert_eq!(k(Key::ArrowLeft), vec![Action::Left]);
         assert_eq!(k(Key::End), vec![Action::End]);

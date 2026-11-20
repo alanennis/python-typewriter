@@ -5,6 +5,9 @@
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::Instant;
+
+use crate::session::Session;
 
 /// how the line being typed is laid out while an alignment mode is on
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +25,9 @@ pub trait LinePrinter {
 
 /// a sound the machine can make (a beep, the margin bell)
 pub type Sound = Box<dyn FnMut()>;
+
+/// most finished lines that can be shown above the typing
+pub const MAX_PREVIOUS: usize = 7;
 
 /// line spacing choices: single, one and a half, double
 pub const SPACING_CHOICES: [f64; 3] = [1.0, 1.5, 2.0];
@@ -42,6 +48,16 @@ pub struct Options {
     pub printer_name: String,
     /// false silences the bell and the margin bell
     pub bell_on: bool,
+    /// columns the tab key jumps to
+    pub tab_stops: Vec<usize>,
+    /// words to write this session; 0 for none
+    pub word_target: usize,
+    /// show the session time on screen
+    pub show_timer: bool,
+    /// show the words per minute on screen
+    pub show_wpm: bool,
+    /// finished lines shown above the typing, 0 to MAX_PREVIOUS
+    pub previous_lines: usize,
 }
 
 impl Default for Options {
@@ -57,6 +73,11 @@ impl Default for Options {
             use_printer: true,
             printer_name: "none".into(),
             bell_on: true,
+            tab_stops: Vec::new(),
+            word_target: 0,
+            show_timer: true,
+            show_wpm: true,
+            previous_lines: 3,
         }
     }
 }
@@ -71,9 +92,10 @@ pub struct Typewriter {
     pub right_margin: usize,
     pub left_margin: usize,
     pub margin_release: bool,
-    pub prev_buf_1: String,
-    pub prev_buf_2: String,
-    pub prev_buf_3: String,
+    /// the last MAX_PREVIOUS finished lines, oldest first
+    pub previous: Vec<String>,
+    /// how many of them are shown above the typing
+    pub previous_lines: usize,
     pub file_name: String,
     pub use_file: bool,
     pub use_printer: bool,
@@ -91,6 +113,19 @@ pub struct Typewriter {
     pub printer_found: bool,
     pub printer_name: String,
     pub bell_on: bool,
+    /// columns the tab key jumps to, in order
+    pub tab_stops: Vec<usize>,
+    /// words to write this session; 0 for none
+    pub word_target: usize,
+    /// word_count when the session started (more than 0 when carrying on
+    /// with an earlier file)
+    pub start_words: usize,
+    /// the margin bell has rung for reaching word_target
+    pub target_reached: bool,
+    /// time spent at the machine, for the words per minute
+    pub session: Session,
+    pub show_timer: bool,
+    pub show_wpm: bool,
     bell_sound: Option<Sound>,
     ding_sound: Option<Sound>,
 }
@@ -109,6 +144,9 @@ impl Typewriter {
         let right_margin = opts.right_margin.unwrap_or(opts.width).min(opts.width);
         let today = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
         let printer_found = printer.is_some();
+        let mut tab_stops: Vec<usize> = opts.tab_stops.into_iter().filter(|&c| c < opts.width).collect();
+        tab_stops.sort_unstable();
+        tab_stops.dedup();
         Typewriter {
             width: opts.width,
             autoreturn: opts.autoreturn,
@@ -119,9 +157,8 @@ impl Typewriter {
             right_margin,
             left_margin: opts.left_margin,
             margin_release: false,
-            prev_buf_1: String::new(),
-            prev_buf_2: String::new(),
-            prev_buf_3: String::new(),
+            previous: Vec::new(),
+            previous_lines: opts.previous_lines.min(MAX_PREVIOUS),
             file_name: format!("{today}.txt"),
             use_file: opts.use_file,
             use_printer: opts.use_printer,
@@ -137,6 +174,13 @@ impl Typewriter {
             printer_found,
             printer_name: opts.printer_name,
             bell_on: opts.bell_on,
+            tab_stops,
+            word_target: opts.word_target,
+            start_words: 0,
+            target_reached: false,
+            session: Session::new(Instant::now()),
+            show_timer: opts.show_timer,
+            show_wpm: opts.show_wpm,
             bell_sound: bell,
             ding_sound: ding,
         }
@@ -182,13 +226,18 @@ impl Typewriter {
         self.right_margin.min(self.width.saturating_sub(1))
     }
 
-    /// the margin line: '!' at each margin, ':' where the hot zone starts
-    /// and '.' everywhere else
+    /// the margin line: '!' at each margin, ':' where the hot zone starts,
+    /// 'T' at each tab stop and '.' everywhere else
     pub fn give_tab_bar(&self) -> String {
         let mut bar = vec!['.'; self.width];
         let hot = self.hot_zone_start();
         if hot >= 0 && (hot as usize) < self.width {
             bar[hot as usize] = ':';
+        }
+        for &stop in &self.tab_stops {
+            if stop < self.width {
+                bar[stop] = 'T';
+            }
         }
         if self.left_margin < self.width {
             bar[self.left_margin] = '!';
@@ -331,11 +380,90 @@ impl Typewriter {
         }
     }
 
-    /// bump all the previous lines up the chain
+    /// set a tab stop at the cursor, or clear the one that's there
+    pub fn toggle_tab_stop(&mut self) {
+        if self.align.is_some() || self.cursor >= self.width {
+            self.bell();
+            return;
+        }
+        match self.tab_stops.binary_search(&self.cursor) {
+            Ok(i) => {
+                self.tab_stops.remove(i);
+            }
+            Err(i) => self.tab_stops.insert(i, self.cursor),
+        }
+    }
+
+    /// clear every tab stop (the margins stay)
+    pub fn clear_tab_stops(&mut self) {
+        self.tab_stops.clear();
+    }
+
+    /// move to the next tab stop. in the text the cursor just moves; past
+    /// the end of it the line is filled with spaces up to the stop, ringing
+    /// the margin bell if that passes it. dings if there's no stop ahead
+    /// that can be typed at
+    pub fn tab(&mut self) {
+        // the last column a character can go in
+        let limit = if self.margin_release { self.width.saturating_sub(1) } else { self.right_margin };
+        let next = self.tab_stops.iter().copied().find(|&s| s > self.cursor);
+        let stop = match next {
+            Some(s) if self.align.is_none() && s < limit.min(self.width.saturating_sub(1)) => s,
+            _ => {
+                self.bell();
+                return;
+            }
+        };
+        let len = self.buffer.len();
+        if stop > len {
+            let hot = self.hot_zone_start();
+            if len as i64 <= hot && hot < stop as i64 {
+                self.ding();
+            }
+            self.buffer.resize(stop, ' ');
+            self.margin_hot_zone = stop as i64 >= hot;
+        }
+        self.cursor = stop;
+    }
+
+    /// words written this session
+    pub fn session_words(&self) -> usize {
+        self.word_count.saturating_sub(self.start_words)
+    }
+
+    /// carry on with an earlier file in save_folder: new lines are added
+    /// to it, its last lines show above the typing and the line and
+    /// word counts start from its totals
+    pub fn carry_on(&mut self, file_name: &str) -> io::Result<()> {
+        let text = std::fs::read_to_string(Path::new(&self.save_folder).join(file_name))?;
+        let lines: Vec<&str> = text.lines().collect();
+        let from = lines.len().saturating_sub(MAX_PREVIOUS);
+        self.previous = lines[from..].iter().map(|l| l.to_string()).collect();
+        self.line_count = lines.len();
+        self.word_count = text.split_whitespace().count();
+        self.start_words = self.word_count;
+        self.file_name = file_name.to_string();
+        Ok(())
+    }
+
+    /// keep the finished line, dropping the oldest past MAX_PREVIOUS
     fn buffer_ripple(&mut self) {
-        self.prev_buf_3 = std::mem::take(&mut self.prev_buf_2);
-        self.prev_buf_2 = std::mem::take(&mut self.prev_buf_1);
-        self.prev_buf_1 = self.give_buffer();
+        self.previous.push(self.give_buffer());
+        if self.previous.len() > MAX_PREVIOUS {
+            self.previous.remove(0);
+        }
+    }
+
+    /// the n-th line back (1 is the line just finished), "" if there
+    /// isn't one
+    pub fn previous_line(&self, n: usize) -> &str {
+        self.previous.len().checked_sub(n).map_or("", |i| &self.previous[i])
+    }
+
+    /// the previous_lines lines to show above the typing, oldest (top)
+    /// first, blank where there aren't enough yet
+    pub fn shown_previous(&self) -> Vec<&str> {
+        (1..=self.previous_lines).rev().map(|n| self.previous_line(n)).collect()
     }
 
     /// finish the line: count it, write it to the file, print it and start
@@ -345,6 +473,10 @@ impl Typewriter {
         let line = self.give_buffer();
         self.word_count += line.split_whitespace().count();
         self.line_count += 1;
+        if self.word_target > 0 && !self.target_reached && self.session_words() >= self.word_target {
+            self.target_reached = true;
+            self.ding();
+        }
 
         if self.use_file {
             let file_path = Path::new(&self.save_folder).join(&self.file_name);
@@ -492,6 +624,16 @@ impl Typewriter {
     /// paused still go to the file but are never sent to the printer
     pub fn toggle_printer(&mut self) {
         self.use_printer = !self.use_printer;
+    }
+
+    /// show or hide the session time
+    pub fn toggle_timer(&mut self) {
+        self.show_timer = !self.show_timer;
+    }
+
+    /// show or hide the words per minute
+    pub fn toggle_wpm(&mut self) {
+        self.show_wpm = !self.show_wpm;
     }
 
     pub fn toggle_help(&mut self) {
@@ -871,9 +1013,9 @@ mod tests {
             type_text(&mut t, line);
             t.carriage_return().unwrap();
         }
-        assert_eq!(t.prev_buf_1, "four");
-        assert_eq!(t.prev_buf_2, "three");
-        assert_eq!(t.prev_buf_3, "two");
+        assert_eq!(t.previous_line(1), "four");
+        assert_eq!(t.previous_line(2), "three");
+        assert_eq!(t.previous_line(3), "two");
     }
 
     #[test]
@@ -1089,7 +1231,7 @@ mod tests {
         type_text(&mut t, "Hi");
         t.carriage_return().unwrap();
         assert!(!t.centre_mode());
-        assert_eq!(t.prev_buf_1.trim(), "Hi");
+        assert_eq!(t.previous_line(1).trim(), "Hi");
         assert_eq!(t.give_buffer(), sp(10));
     }
 
@@ -1420,5 +1562,165 @@ mod tests {
         t.toggle_line_space(); // 1.5 -> 2
         t.carriage_return().unwrap();
         assert_eq!(p.lines(), [(sp(4), 1.5), (sp(4), 2.0)]);
+    }
+
+    // ---- tab stops ----
+
+    fn tabs(stops: &[usize]) -> Options {
+        Options { tab_stops: stops.to_vec(), ..opts() }
+    }
+
+    #[test]
+    fn tab_stops_sorted_and_kept_on_the_page() {
+        let t = quiet(Options { width: 40, ..tabs(&[20, 5, 20, 99]) });
+        assert_eq!(t.tab_stops, [5, 20]);
+    }
+
+    #[test]
+    fn tab_pads_to_the_next_stop() {
+        let mut t = quiet(tabs(&[5, 20]));
+        type_text(&mut t, "ab");
+        t.tab();
+        assert_eq!((t.give_buffer(), t.cursor), (format!("ab{}", sp(3)), 5));
+        t.tab();
+        type_text(&mut t, "c");
+        assert_eq!(t.give_buffer(), format!("ab{}c", sp(18)));
+    }
+
+    #[test]
+    fn tab_inside_the_text_just_moves() {
+        let mut t = quiet(tabs(&[3]));
+        type_text(&mut t, "hello there");
+        t.cursor_home();
+        t.tab();
+        assert_eq!((t.give_buffer(), t.cursor), ("hello there".to_string(), 3));
+    }
+
+    #[test]
+    fn tab_with_no_stop_ahead_dings() {
+        let bell = Bell::default();
+        let mut t = make(tabs(&[3]), &bell);
+        type_text(&mut t, "hello");
+        t.tab();
+        assert_eq!((t.give_buffer(), bell.count()), ("hello".to_string(), 1));
+        let mut t = make(opts(), &bell);
+        t.tab();
+        assert_eq!(bell.count(), 2);
+    }
+
+    #[test]
+    fn tab_stops_at_the_right_margin_unless_released() {
+        let bell = Bell::default();
+        let mut t = make(Options { right_margin: Some(30), ..tabs(&[30, 40]) }, &bell);
+        t.tab();
+        assert_eq!((t.cursor, bell.count()), (0, 1));
+        t.toggle_margin_release();
+        t.tab();
+        assert_eq!(t.cursor, 30);
+    }
+
+    #[test]
+    fn tab_past_the_bell_point_rings_the_margin_bell() {
+        let (bell, ding) = (Bell::default(), Bell::default());
+        let o = Options { right_margin: Some(40), margin_bell: 8, ..tabs(&[30, 35]) };
+        let mut t = Typewriter::new(o, None, bell.sound(), ding.sound());
+        t.tab(); // to 30, the bell point is 32
+        assert_eq!(ding.count(), 0);
+        t.tab();
+        assert!(t.margin_hot_zone);
+        assert_eq!(ding.count(), 1);
+    }
+
+    #[test]
+    fn alt_t_sets_and_clears_a_stop_at_the_cursor() {
+        let mut t = quiet(opts());
+        type_text(&mut t, "abcd");
+        t.toggle_tab_stop();
+        t.cursor_home();
+        t.toggle_tab_stop();
+        assert_eq!(t.tab_stops, [0, 4]);
+        // the margin mark wins over a stop on the same column
+        assert_eq!(&t.give_tab_bar()[..6], "!...T.");
+        t.cursor_end();
+        t.toggle_tab_stop();
+        assert_eq!(t.tab_stops, [0]);
+        t.clear_tab_stops();
+        assert!(t.tab_stops.is_empty());
+    }
+
+    // ---- session and carrying on ----
+
+    #[test]
+    fn word_target_rings_once() {
+        let (bell, ding) = (Bell::default(), Bell::default());
+        let o = Options { word_target: 3, ..opts() };
+        let mut t = Typewriter::new(o, None, bell.sound(), ding.sound());
+        type_text(&mut t, "one two");
+        t.carriage_return().unwrap();
+        assert!(!t.target_reached);
+        type_text(&mut t, "three");
+        t.carriage_return().unwrap();
+        type_text(&mut t, "four");
+        t.carriage_return().unwrap();
+        assert!(t.target_reached);
+        assert_eq!((ding.count(), t.session_words()), (1, 4));
+    }
+
+    #[test]
+    fn carry_on_picks_up_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("old.txt"), "a b\n\nc d e\nf\n").unwrap();
+        let mut t = quiet(Options { use_file: true, word_target: 2, ..opts() });
+        t.save_folder = dir.path().display().to_string();
+        t.carry_on("old.txt").unwrap();
+        assert_eq!([t.previous_line(3), t.previous_line(2), t.previous_line(1)], ["", "c d e", "f"]);
+        assert_eq!((t.line_count, t.word_count, t.session_words()), (4, 6, 0));
+        type_text(&mut t, "g h");
+        t.carriage_return().unwrap();
+        assert_eq!((t.word_count, t.session_words()), (8, 2));
+        assert!(t.target_reached);
+        let text = std::fs::read_to_string(dir.path().join("old.txt")).unwrap();
+        assert!(text.ends_with("f\ng h\n"));
+    }
+
+    #[test]
+    fn previous_lines_kept_up_to_the_most() {
+        let mut t = quiet(Options { previous_lines: 2, ..opts() });
+        for i in 0..10 {
+            type_text(&mut t, &i.to_string());
+            t.carriage_return().unwrap();
+        }
+        assert_eq!(t.previous.len(), MAX_PREVIOUS);
+        assert_eq!(t.shown_previous(), ["8", "9"]);
+        t.previous_lines = 0;
+        assert!(t.shown_previous().is_empty());
+        t.previous_lines = 7;
+        assert_eq!(t.shown_previous(), ["3", "4", "5", "6", "7", "8", "9"]);
+    }
+
+    #[test]
+    fn previous_lines_capped() {
+        assert_eq!(quiet(Options { previous_lines: 99, ..opts() }).previous_lines, MAX_PREVIOUS);
+    }
+
+    #[test]
+    fn carry_on_shows_as_many_lines_as_wanted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("old.txt"), "1\n2\n3\n4\n5\n6\n7\n8\n9\n").unwrap();
+        let mut t = quiet(Options { previous_lines: 5, ..opts() });
+        t.save_folder = dir.path().display().to_string();
+        t.carry_on("old.txt").unwrap();
+        assert_eq!(t.shown_previous(), ["5", "6", "7", "8", "9"]);
+        assert_eq!(t.line_count, 9);
+    }
+
+    #[test]
+    fn carry_on_short_file_leaves_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("old.txt"), "only\n").unwrap();
+        let mut t = quiet(opts());
+        t.save_folder = dir.path().display().to_string();
+        t.carry_on("old.txt").unwrap();
+        assert_eq!([t.previous_line(3), t.previous_line(2), t.previous_line(1)], ["", "", "only"]);
     }
 }

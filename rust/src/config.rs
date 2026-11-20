@@ -83,16 +83,31 @@ impl Config {
         self.str(key).ok_or_else(|| format!("config needs {key} set to a \"string\""))
     }
 
+    /// a list of column numbers like `[10, 20]`; missing means empty
+    pub fn usize_list(&self, key: &str) -> Result<Vec<usize>, String> {
+        let bad = || format!("config needs {key} set to a list of whole numbers, like [10, 20]");
+        match self.table.get(key) {
+            None => Ok(Vec::new()),
+            Some(toml::Value::Array(items)) => items
+                .iter()
+                .map(|v| v.as_integer().and_then(|i| usize::try_from(i).ok()).ok_or_else(bad))
+                .collect(),
+            Some(_) => Err(bad()),
+        }
+    }
+
     pub fn set_str(&mut self, key: &str, value: &str) {
         self.table.insert(key.into(), toml::Value::String(value.into()));
     }
 }
 
 /// a setting value that can be written back to the config
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Setting {
     Int(i64),
     Bool(bool),
+    /// a list of whole numbers, written as [1, 2, 3]
+    Ints(Vec<i64>),
 }
 
 impl fmt::Display for Setting {
@@ -100,6 +115,10 @@ impl fmt::Display for Setting {
         match self {
             Setting::Int(i) => write!(f, "{i}"),
             Setting::Bool(b) => write!(f, "{b}"),
+            Setting::Ints(v) => {
+                let items: Vec<String> = v.iter().map(i64::to_string).collect();
+                write!(f, "[{}]", items.join(", "))
+            }
         }
     }
 }
@@ -110,6 +129,12 @@ impl From<usize> for Setting {
     }
 }
 
+impl From<&[usize]> for Setting {
+    fn from(v: &[usize]) -> Self {
+        Setting::Ints(v.iter().map(|&i| i as i64).collect())
+    }
+}
+
 impl From<bool> for Setting {
     fn from(v: bool) -> Self {
         Setting::Bool(v)
@@ -117,7 +142,8 @@ impl From<bool> for Setting {
 }
 
 /// where the value starts and ends in a line like `key = 12 # comment`,
-/// if the line sets key to a whole number or true/false
+/// if the line sets key to a whole number, true/false or a list of whole
+/// numbers on one line
 fn value_span(line: &str, key: &str) -> Option<(usize, usize)> {
     let rest = line.strip_prefix(key)?;
     let after_key = rest.trim_start_matches([' ', '\t']);
@@ -131,6 +157,8 @@ fn value_span(line: &str, key: &str) -> Option<(usize, usize)> {
         4
     } else if value.starts_with("false") {
         5
+    } else if value.starts_with('[') {
+        value.find(']')? + 1
     } else {
         return None;
     };
@@ -156,12 +184,12 @@ pub fn replace_setting(text: &str, key: &str, value: Setting) -> String {
     text
 }
 
-/// write whole number or true/false settings back to the config file,
+/// write whole number, true/false or list settings back to the config file,
 /// leaving the rest of the file (including comments) untouched
 pub fn save_settings(path: &Path, settings: &[(&str, Setting)]) -> std::io::Result<()> {
     let mut text = fs::read_to_string(path)?;
-    for &(key, value) in settings {
-        text = replace_setting(&text, key, value);
+    for (key, value) in settings {
+        text = replace_setting(&text, key, value.clone());
     }
     fs::write(path, text)
 }
@@ -252,6 +280,24 @@ save_folder = \"/somewhere/\"
         let (text, cfg) = read(&path);
         assert!(text.contains("spacing_index = 2 # 1.5 line spacing"));
         assert_eq!(cfg.int("width"), Some(75));
+    }
+
+    #[test]
+    fn save_tab_stops_as_a_list() {
+        let (_d, path) = write("tab_stops = [] # columns\nwidth = 75\n");
+        save_settings(&path, &[("tab_stops", [10usize, 25].as_slice().into())]).unwrap();
+        let (text, cfg) = read(&path);
+        assert!(text.contains("tab_stops = [10, 25] # columns"), "{text}");
+        assert_eq!(cfg.usize_list("tab_stops").unwrap(), vec![10, 25]);
+        save_settings(&path, &[("tab_stops", [].as_slice().into())]).unwrap();
+        assert_eq!(read(&path).1.usize_list("tab_stops").unwrap(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn tab_stops_missing_or_bad() {
+        assert!(Config::parse("width = 1").unwrap().usize_list("tab_stops").unwrap().is_empty());
+        assert!(Config::parse("tab_stops = 5").unwrap().usize_list("tab_stops").is_err());
+        assert!(Config::parse("tab_stops = [-1]").unwrap().usize_list("tab_stops").is_err());
     }
 
     #[test]

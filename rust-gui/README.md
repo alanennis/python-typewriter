@@ -21,19 +21,22 @@ target/release/typewriter-gui -p zebra        # same options as the terminal ver
 target/release/typewriter-gui False
 target/release/typewriter-gui -f letter.txt
 target/release/typewriter-gui --config ~/my.toml
+target/release/typewriter-gui --continue
+target/release/typewriter-gui --lines 7
 ```
 
 ## keys
 
-all the same as the terminal version: type, enter, arrows/home/end, del,
-backspace, alt+backspace, and alt with l r s a n q p c j b h (alt-h shows
+all the same as the terminal version: type, enter, tab, arrows/home/end, del,
+backspace, alt+backspace, and alt with l r s t x m w a n q p c j b h (alt-h shows
 them). ctrl-c or alt-q quits, as does closing the window.
 
 extras for the window:
 
 - the text grows and shrinks with the window; ctrl `+` / ctrl `-` / ctrl `0`
   zoom as well
-- `LS`, `A-RTN`, `Printing`, `Bell` and `alt-h for help` can be clicked
+- `LS`, `A-RTN`, `Printing`, `Bell`, `Time`, `WPM` and `alt-h for help` can
+  be clicked
 - the bell beeps (a short tone) and flashes the line, since there's no
   terminal bell
 - follows the desktop's light or dark theme
