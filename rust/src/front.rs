@@ -323,10 +323,17 @@ pub struct Item {
     pub look: Look,
     /// the alt key that does the same, for front ends that can click it
     pub key: Option<char>,
+    /// clicking it opens the settings, for front ends that have them
+    pub opens_settings: bool,
 }
 
 fn item(row: usize, col: usize, text: impl Into<String>, look: Look, key: Option<char>) -> Item {
-    Item { row, col, text: text.into(), look, key }
+    Item { row, col, text: text.into(), look, key, opens_settings: false }
+}
+
+/// a setting with no alt key of its own, changed in the settings
+fn setting(row: usize, col: usize, text: impl Into<String>) -> Item {
+    Item { opens_settings: true, ..item(row, col, text, Look::Dim, None) }
 }
 
 /// where things go on the screen. the previous lines are at the top,
@@ -355,11 +362,11 @@ pub fn panel(m: &Typewriter, cols: usize) -> Vec<Item> {
     use Look::{Dim, Highlight};
     let r = rows(m).panel;
     let mut items = vec![
-        item(r, 0, format!("Width={}", m.width), Dim, None),
+        setting(r, 0, format!("Width={}", m.width)),
         item(r, 10, format!("LS={}", m.current_spacing), Dim, Some('s')),
         item(r, 17, format!("A-RTN={}", py_bool(m.autoreturn)), Dim, Some('a')),
-        item(r, 30, format!("LM={}", m.left_margin), Dim, None),
-        item(r, 36, format!("RM={}", m.right_margin), Dim, None),
+        setting(r, 30, format!("LM={}", m.left_margin)),
+        setting(r, 36, format!("RM={}", m.right_margin)),
     ];
     if m.centre_mode() {
         items.push(item(r, 44, "CENTRE", Highlight, None));
@@ -368,7 +375,7 @@ pub fn panel(m: &Typewriter, cols: usize) -> Vec<Item> {
     }
     let file_name = short_home_path(&m.file_name, cols.saturating_sub("File=".len()));
     items.extend([
-        item(r + 1, 0, format!("File={file_name}"), Dim, None),
+        setting(r + 1, 0, format!("File={file_name}")),
         item(r + 2, 0, format!("Printer Found={}", py_bool(m.printer_found)), Dim, None),
         item(r + 2, 20, format!("LC={}", m.line_count), Dim, None),
         item(r + 2, 27, format!("WC={}", m.word_count), Dim, None),

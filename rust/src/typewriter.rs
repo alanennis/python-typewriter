@@ -26,6 +26,10 @@ pub trait LinePrinter {
 /// a sound the machine can make (a beep, the margin bell)
 pub type Sound = Box<dyn FnMut()>;
 
+/// how a tab stop is marked on the tab bar: a comma, low like the dots
+/// so it doesn't stand out like the margins
+pub const TAB_MARK: char = ',';
+
 /// most finished lines that can be shown above the typing
 pub const MAX_PREVIOUS: usize = 7;
 
@@ -227,7 +231,7 @@ impl Typewriter {
     }
 
     /// the margin line: '!' at each margin, ':' where the hot zone starts,
-    /// 'T' at each tab stop and '.' everywhere else
+    /// TAB_MARK at each tab stop and '.' everywhere else
     pub fn give_tab_bar(&self) -> String {
         let mut bar = vec!['.'; self.width];
         let hot = self.hot_zone_start();
@@ -236,7 +240,7 @@ impl Typewriter {
         }
         for &stop in &self.tab_stops {
             if stop < self.width {
-                bar[stop] = 'T';
+                bar[stop] = TAB_MARK;
             }
         }
         if self.left_margin < self.width {
@@ -1640,7 +1644,7 @@ mod tests {
         t.toggle_tab_stop();
         assert_eq!(t.tab_stops, [0, 4]);
         // the margin mark wins over a stop on the same column
-        assert_eq!(&t.give_tab_bar()[..6], "!...T.");
+        assert_eq!(&t.give_tab_bar()[..6], "!...,.");
         t.cursor_end();
         t.toggle_tab_stop();
         assert_eq!(t.tab_stops, [0]);

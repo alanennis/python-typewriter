@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use typewriter::front::{self, Args, Look, Setup};
+use typewriter::settings::{Settings, WIDTHS};
 use typewriter::sound::BellSound;
-use typewriter::typewriter::{Sound, Typewriter};
+use typewriter::typewriter::{MAX_PREVIOUS, SPACING_CHOICES, Sound, Typewriter};
 
 /// fewest columns laid out; the help lines are 80 wide
 const MIN_COLS: usize = 81;
@@ -33,6 +34,8 @@ enum Action {
     End,
     Delete,
     Quit,
+    /// open the settings panel (ctrl+,)
+    Settings,
 }
 
 fn letter(key: Key) -> Option<char> {
@@ -59,7 +62,11 @@ fn actions_for(event: &Event, alt_down: bool) -> Vec<Action> {
         Event::Copy => vec![Action::Quit],
         Event::Key { key, pressed: true, modifiers, .. } => {
             let action = if modifiers.ctrl || modifiers.command {
-                (*key == Key::C).then_some(Action::Quit)
+                match key {
+                    Key::C => Some(Action::Quit),
+                    Key::Comma => Some(Action::Settings),
+                    _ => None,
+                }
             } else if modifiers.alt {
                 match key {
                     Key::Backspace => Some(Action::DeleteWord),
@@ -89,6 +96,8 @@ fn apply(action: Action, m: &mut Typewriter, config_path: &Path) -> Result<bool,
     m.session.key(Instant::now());
     match action {
         Action::Quit => return Ok(false),
+        // the window opens it; nothing for the machine to do
+        Action::Settings => {}
         Action::Alt(c) => return Ok(front::alt_command(c, m, config_path)),
         Action::DeleteWord => m.delete_word(),
         Action::Char(c) => m.char_add(c)?,
@@ -246,6 +255,109 @@ struct TypewriterApp {
     error: Option<String>,
     /// when a key was last pressed, to keep the cursor solid while typing
     last_key: Instant,
+    /// the settings panel, while it's open
+    settings: Option<SettingsPanel>,
+}
+
+/// the settings being edited, and what was wrong with them when saving
+struct SettingsPanel {
+    draft: Settings,
+    problem: Option<String>,
+}
+
+/// what the settings panel was asked to do this frame
+#[derive(PartialEq)]
+enum PanelChoice {
+    Open,
+    Save,
+    Cancel,
+}
+
+/// the label at the bottom right that opens the settings
+const SETTINGS_LABEL: &str = "ctrl+, settings";
+
+/// draw the settings panel over the typewriter
+fn settings_window(ctx: &egui::Context, panel: &mut SettingsPanel, pal: &Palette) -> PanelChoice {
+    use egui::DragValue;
+    let mut choice = PanelChoice::Open;
+    let s = &mut panel.draft;
+    egui::Window::new("Settings")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ctx, |ui| {
+            egui::Grid::new("settings-grid").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+                let width = s.width;
+                ui.label("Width");
+                ui.add(DragValue::new(&mut s.width).range(WIDTHS)).on_hover_text("columns on the page");
+                ui.end_row();
+                ui.label("Left margin");
+                ui.add(DragValue::new(&mut s.left_margin).range(0..=width));
+                ui.end_row();
+                ui.label("Right margin");
+                ui.add(DragValue::new(&mut s.right_margin).range(1..=width));
+                ui.end_row();
+                ui.label("Margin bell");
+                ui.horizontal(|ui| {
+                    ui.add(DragValue::new(&mut s.margin_bell).range(0..=width));
+                    ui.weak("columns before the right margin");
+                });
+                ui.end_row();
+                ui.label("Line spacing");
+                egui::ComboBox::from_id_salt("spacing")
+                    .selected_text(SPACING_CHOICES[s.spacing_index.min(2)].to_string())
+                    .show_ui(ui, |ui| {
+                        for (i, sp) in SPACING_CHOICES.iter().enumerate() {
+                            ui.selectable_value(&mut s.spacing_index, i, sp.to_string());
+                        }
+                    });
+                ui.end_row();
+                ui.label("Previous lines");
+                ui.horizontal(|ui| {
+                    ui.add(DragValue::new(&mut s.previous_lines).range(0..=MAX_PREVIOUS));
+                    ui.weak("shown above the typing");
+                });
+                ui.end_row();
+                ui.label("Tab stops");
+                ui.add(egui::TextEdit::singleline(&mut s.tab_stops).hint_text("10, 20, 30"));
+                ui.end_row();
+                ui.label("Word target");
+                ui.horizontal(|ui| {
+                    ui.add(DragValue::new(&mut s.word_target).range(0..=1_000_000));
+                    ui.weak("words this session, 0 for none");
+                });
+                ui.end_row();
+                ui.label("Save folder");
+                ui.add(egui::TextEdit::singleline(&mut s.save_folder).desired_width(320.0));
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut s.autoreturn, "autoreturn");
+                ui.checkbox(&mut s.bell_on, "bell");
+                ui.checkbox(&mut s.use_printer, "printing");
+                ui.checkbox(&mut s.show_timer, "show time");
+                ui.checkbox(&mut s.show_wpm, "show wpm");
+            });
+            if let Some(p) = &panel.problem {
+                ui.add_space(6.0);
+                ui.colored_label(pal.error, p);
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    choice = PanelChoice::Save;
+                }
+                if ui.button("Cancel").clicked() {
+                    choice = PanelChoice::Cancel;
+                }
+                ui.weak("saved to the config");
+            });
+        });
+    if ctx.input(|i| i.key_pressed(Key::Escape)) {
+        choice = PanelChoice::Cancel;
+    }
+    choice
 }
 
 impl TypewriterApp {
@@ -265,7 +377,33 @@ impl TypewriterApp {
         }
     }
 
+    fn open_settings(&mut self) {
+        if let Some(m) = &self.machine {
+            self.settings = Some(SettingsPanel { draft: Settings::from_machine(m), problem: None });
+        }
+    }
+
+    /// show the settings panel if it's open, and save or close it
+    fn settings_panel(&mut self, ctx: &egui::Context, pal: &Palette) {
+        let Some(panel) = self.settings.as_mut() else { return };
+        match settings_window(ctx, panel, pal) {
+            PanelChoice::Open => {}
+            PanelChoice::Cancel => self.settings = None,
+            PanelChoice::Save => {
+                let Some(m) = self.machine.as_mut() else { return };
+                match panel.draft.apply(m, &self.config_path) {
+                    Ok(()) => self.settings = None,
+                    Err(e) => panel.problem = Some(e),
+                }
+            }
+        }
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        // while the settings are open the keys are for its boxes
+        if self.settings.is_some() {
+            return;
+        }
         let (events, alt_down) = ctx.input(|i| (i.events.clone(), i.modifiers.alt));
         let actions: Vec<Action> = events.iter().flat_map(|e| actions_for(e, alt_down)).collect();
         if actions.is_empty() {
@@ -284,6 +422,10 @@ impl TypewriterApp {
         self.last_key = Instant::now();
         let Some(m) = self.machine.as_mut() else { return };
         for action in actions {
+            if action == Action::Settings {
+                self.open_settings();
+                return;
+            }
             match apply(action, m, &self.config_path) {
                 Ok(true) => {}
                 Ok(false) => return self.quit(ctx),
@@ -325,10 +467,28 @@ impl TypewriterApp {
         g.put(&p, typing_row, 0, &typing, pal.typing);
         g.put(&p, rows.tab_bar, 0, &m.give_tab_bar(), pal.dim);
 
-        // the settings and help; the ones with an alt key can be clicked
+        // the settings and help; the ones with an alt key can be clicked,
+        // and the ones without open the settings panel
         let mut clicked = None;
+        let mut open_settings = false;
+        let panel_open = self.settings.is_some();
+        let clickable = |ui: &mut egui::Ui, rect: Rect, id: egui::Id| {
+            // not focusable, so the keyboard stays the typewriter's
+            let r = ui.interact(rect, id, Sense::CLICK);
+            if r.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            r.clicked()
+        };
         for item in front::panel(m, cols - 1) {
             g.put(&p, item.row, item.col, &item.text, pal.look(item.look));
+            if panel_open {
+                continue;
+            }
+            if item.opens_settings {
+                let rect = g.cells(item.row, item.col, item.text.chars().count());
+                open_settings |= clickable(ui, rect, ui.id().with((item.row, item.col)));
+            }
             if let Some(key) = item.key {
                 let rect = g.cells(item.row, item.col, item.text.chars().count());
                 // not focusable, so the keyboard stays the typewriter's
@@ -346,6 +506,14 @@ impl TypewriterApp {
             g.put(&p, message_row, 0, &format!("problem: {e}"), pal.error);
         } else if let Some(msg) = &self.message {
             g.put(&p, message_row, 0, msg, pal.highlight);
+        } else if !panel_open {
+            let col = cols - 1 - SETTINGS_LABEL.len();
+            g.put(&p, message_row, col, SETTINGS_LABEL, pal.dim);
+            let rect = g.cells(message_row, col, SETTINGS_LABEL.len());
+            open_settings |= clickable(ui, rect, ui.id().with("settings"));
+        }
+        if open_settings {
+            self.open_settings();
         }
 
         if let (Some(c), Some(m)) = (clicked, self.machine.as_mut()) {
@@ -373,6 +541,7 @@ impl eframe::App for TypewriterApp {
         let pal = Palette::new(ctx.style().visuals.dark_mode);
         let frame = egui::Frame::new().fill(pal.paper).inner_margin(16.0);
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| self.draw(ui, &pal));
+        self.settings_panel(ctx, &pal);
     }
 }
 
@@ -437,6 +606,7 @@ fn build(args: Args) -> Result<TypewriterApp, String> {
         message,
         error: None,
         last_key: Instant::now(),
+        settings: None,
     })
 }
 
@@ -506,6 +676,7 @@ mod tests {
     #[test]
     fn ctrl_c_quits() {
         assert_eq!(actions_for(&key(Key::C, Modifiers::CTRL), false), vec![Action::Quit]);
+        assert_eq!(actions_for(&key(Key::Comma, Modifiers::CTRL), false), vec![Action::Settings]);
         assert_eq!(actions_for(&Event::Copy, false), vec![Action::Quit]);
         assert!(actions_for(&key(Key::Plus, Modifiers::CTRL), false).is_empty());
     }

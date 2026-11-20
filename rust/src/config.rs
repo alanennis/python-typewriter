@@ -108,6 +108,8 @@ pub enum Setting {
     Bool(bool),
     /// a list of whole numbers, written as [1, 2, 3]
     Ints(Vec<i64>),
+    /// text, written as a quoted toml string
+    Str(String),
 }
 
 impl fmt::Display for Setting {
@@ -118,6 +120,19 @@ impl fmt::Display for Setting {
             Setting::Ints(v) => {
                 let items: Vec<String> = v.iter().map(i64::to_string).collect();
                 write!(f, "[{}]", items.join(", "))
+            }
+            Setting::Str(s) => {
+                // always a "basic" string, so value_span can find it again
+                f.write_str("\"")?;
+                for c in s.chars() {
+                    match c {
+                        '"' => f.write_str("\\\"")?,
+                        '\\' => f.write_str("\\\\")?,
+                        c if c.is_control() => write!(f, "\\u{:04X}", c as u32)?,
+                        c => write!(f, "{c}")?,
+                    }
+                }
+                f.write_str("\"")
             }
         }
     }
@@ -135,6 +150,12 @@ impl From<&[usize]> for Setting {
     }
 }
 
+impl From<&str> for Setting {
+    fn from(v: &str) -> Self {
+        Setting::Str(v.to_string())
+    }
+}
+
 impl From<bool> for Setting {
     fn from(v: bool) -> Self {
         Setting::Bool(v)
@@ -142,8 +163,8 @@ impl From<bool> for Setting {
 }
 
 /// where the value starts and ends in a line like `key = 12 # comment`,
-/// if the line sets key to a whole number, true/false or a list of whole
-/// numbers on one line
+/// if the line sets key to a whole number, true/false, a list of whole
+/// numbers or a "string" on one line
 fn value_span(line: &str, key: &str) -> Option<(usize, usize)> {
     let rest = line.strip_prefix(key)?;
     let after_key = rest.trim_start_matches([' ', '\t']);
@@ -159,10 +180,27 @@ fn value_span(line: &str, key: &str) -> Option<(usize, usize)> {
         5
     } else if value.starts_with('[') {
         value.find(']')? + 1
+    } else if value.starts_with('"') {
+        string_len(value)?
     } else {
         return None;
     };
     Some((start, start + len))
+}
+
+/// length of the "string" at the start of value, quotes included,
+/// stepping over escapes like \"
+fn string_len(value: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (i, c) in value.char_indices().skip(1) {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return Some(i + 1),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// replace the value of key in the config text, or add `key = value` to
@@ -184,7 +222,7 @@ pub fn replace_setting(text: &str, key: &str, value: Setting) -> String {
     text
 }
 
-/// write whole number, true/false or list settings back to the config file,
+/// write whole number, true/false, list or string settings back to the config file,
 /// leaving the rest of the file (including comments) untouched
 pub fn save_settings(path: &Path, settings: &[(&str, Setting)]) -> std::io::Result<()> {
     let mut text = fs::read_to_string(path)?;
@@ -291,6 +329,20 @@ save_folder = \"/somewhere/\"
         assert_eq!(cfg.usize_list("tab_stops").unwrap(), vec![10, 25]);
         save_settings(&path, &[("tab_stops", [].as_slice().into())]).unwrap();
         assert_eq!(read(&path).1.usize_list("tab_stops").unwrap(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn save_a_string_keeping_the_comment() {
+        let (_d, path) = write("save_folder = \"/old/place/\" # where it goes\nwidth = 75\n");
+        save_settings(&path, &[("save_folder", "/new \"quoted\" place/".into())]).unwrap();
+        let (text, cfg) = read(&path);
+        assert!(text.ends_with("# where it goes\nwidth = 75\n"), "{text}");
+        assert_eq!(cfg.str("save_folder"), Some("/new \"quoted\" place/"));
+        // and again, over the escaped one
+        save_settings(&path, &[("save_folder", "/x/".into())]).unwrap();
+        let (text, cfg) = read(&path);
+        assert_eq!(cfg.str("save_folder"), Some("/x/"));
+        assert!(text.contains("# where it goes"));
     }
 
     #[test]

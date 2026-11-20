@@ -22,7 +22,7 @@ target/release/typewriter --lines 7       # show 7 finished lines above the typi
 
 - **tab stops.** alt-t sets a tab stop at the cursor (or clears the one
   there), alt-x clears them all, and the tab key jumps to the next one,
-  filling with spaces past the end of the text. stops show as `T` on the tab
+  filling with spaces past the end of the text. stops show as a `,` on the tab
   bar and are saved to `tab_stops` in the config. tab dings if there's no
   stop ahead before the right margin.
 - **carrying on with a file.** `-f letter.txt` on a file that's already

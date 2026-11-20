@@ -7,6 +7,7 @@ pub mod config;
 pub mod front;
 pub mod printer;
 pub mod session;
+pub mod settings;
 pub mod sound;
 pub mod typewriter;
 pub mod usb;

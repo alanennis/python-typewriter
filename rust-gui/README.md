@@ -33,6 +33,14 @@ them). ctrl-c or alt-q quits, as does closing the window.
 
 extras for the window:
 
+- a settings panel: ctrl+, (or click `Width`, `LM`, `RM`, `File` or
+  `ctrl+, settings` at the bottom right) opens it. it has the width,
+  margins, margin bell, line spacing, previous lines, tab stops, word
+  target, save folder and the on/off switches. save puts them to work
+  straight away and writes them to the config; cancel or esc leaves things
+  as they were. a new left margin starts on the next line unless nothing's
+  typed on this one yet. the printer is still chosen in the config or with
+  `-p`, since changing it needs a restart
 - the text grows and shrinks with the window; ctrl `+` / ctrl `-` / ctrl `0`
   zoom as well
 - `LS`, `A-RTN`, `Printing`, `Bell`, `Time`, `WPM` and `alt-h for help` can
